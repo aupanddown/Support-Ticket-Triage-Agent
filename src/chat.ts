@@ -9,11 +9,11 @@ import type { Decision, Ticket, TriageResult, Urgency } from "./schemas.js";
 import { loadSampleTickets } from "./tickets.js";
 
 /**
- * Interactive manual testing in the terminal, based on the sample tickets.
+ * Interactive manual testing in the terminal.
  *
- * Pick T1, T2 or T3: the agent triages the whole thread right away and prints the result.
- * Then you can type a follow-up message as the customer (for example a prompt injection)
- * and the agent triages the thread again.
+ * Pick T1, T2 or T3: the agent triages that sample thread right away. Or pick N1, N2 or N3 to
+ * start an empty ticket as one of the sample customers and type the messages yourself.
+ * Every message you type is added to the thread as the customer, and the agent triages again.
  *
  * Usage: npm run chat
  */
@@ -152,8 +152,23 @@ async function triage(session: Session, llm: LlmClient, model: string): Promise<
 }
 
 function printMenu(samples: Ticket[]): void {
-  console.log(`\n${styleText("bold", "Pick a sample ticket")}`);
+  console.log(`\n${styleText("bold", "Pick a sample ticket, or start a new one and type the messages yourself")}`);
   for (const t of samples) console.log(`  ${styleText("bold", t.id)}  ${t.customer.info}`);
+  samples.forEach((t, i) => console.log(`  ${styleText("bold", `N${i + 1}`)}  new ticket as ${t.customer.id} (${t.customer.info})`));
+}
+
+/** T1-T3 opens a sample thread; N1-N3 opens an empty ticket for that sample's customer. */
+function startSession(choice: string, samples: Ticket[]): Session | undefined {
+  const answer = choice.toUpperCase();
+  const sample = samples.find((t) => t.id === answer);
+  if (sample) return { ticket: sample };
+
+  const customer = /^N(\d)$/.exec(answer) && samples[Number(answer.slice(1)) - 1]?.customer;
+  if (customer) {
+    console.log(dim(`New ticket for ${customer.id}. Type the customer's first message.`));
+    return { ticket: { id: "NEW", customer, messages: [] } };
+  }
+  return undefined;
 }
 
 async function main(): Promise<void> {
@@ -166,7 +181,6 @@ async function main(): Promise<void> {
   rl.on("SIGINT", () => rl.close()); // Ctrl+C exits cleanly
 
   console.log(styleText("bold", "Support ticket triage agent"));
-  console.log(dim(`Model ${config.openai.model}. Each triage calls the OpenAI API about 3 to 4 times.`));
 
   let session: Session | undefined;
   printMenu(samples);
@@ -182,15 +196,15 @@ async function main(): Promise<void> {
       session = undefined;
       printMenu(samples);
     } else if (!session) {
-      const sample = samples.find((t) => t.id === line.toUpperCase());
-      if (sample) {
-        session = { ticket: sample };
+      session = startSession(line, samples);
+      if (session && session.ticket.messages.length > 0) {
         await triage(session, llm, config.openai.model);
-      } else if (line) {
-        console.log(`Please type one of: ${samples.map((t) => t.id).join(", ")}`);
+      } else if (!session && line) {
+        const choices = [...samples.map((t) => t.id), ...samples.map((_, i) => `N${i + 1}`)];
+        console.log(`Please type one of: ${choices.join(", ")}`);
       }
     } else if (line === "/json") {
-      console.log(JSON.stringify(session.lastResult, null, 2));
+      console.log(session.lastResult ? JSON.stringify(session.lastResult, null, 2) : "No result yet.");
     } else if (line.startsWith("/")) {
       console.log(HELP);
     } else if (line) {

@@ -58,7 +58,7 @@ Results are printed to stdout as JSON; progress and tool calls go to stderr, so 
 npm run chat
 ```
 
-Pick a sample ticket (T1, T2 or T3). The agent triages the whole thread right away and prints a readable summary: the customer messages, each tool call, the result (urgency, decision, team, KB articles, guardrails), the reply draft and the internal note. You can then type a follow-up message as the customer (for example a prompt injection) to see how the agent and the guardrails react. `/json` shows the raw result, `/new` picks another ticket and `/quit` exits.
+Pick a sample ticket (`T1`, `T2` or `T3`) to triage that thread right away, or `N1`, `N2` or `N3` to start an empty ticket as one of the sample customers (Free, Enterprise, Pro) and type the messages yourself. Every message you type is added to the thread as the customer, and the agent triages the whole thread again. It prints a readable summary: the messages, each tool call, the result (urgency, decision, teams, issue types, KB articles, guardrails), the reply draft and the internal note. `/json` shows the raw result, `/new` goes back to the menu and `/quit` exits.
 
 ### HTTP API
 
