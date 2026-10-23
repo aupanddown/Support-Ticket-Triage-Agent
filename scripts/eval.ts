@@ -9,8 +9,8 @@ import { loadSampleTickets } from "../src/tickets.js";
 
 /**
  * Runs the REAL agent (OpenAI API) on the sample tickets and compares the results with data/golden.json.
- * Usage: npm run eval                 (each ticket once)
- *        npm run eval -- --runs 3     (each ticket 3 times, to measure run-to-run stability)
+ * Usage: npm run eval       (each ticket once)
+ *        npm run eval 3     (each ticket 3 times, to measure run-to-run stability; same as -- --runs 3)
  * Exit code 1 if a policy invariant is broken: that is a bug in our code, whatever the model does.
  */
 
@@ -105,9 +105,12 @@ function printStability(reports: CaseReport[], runs: number): void {
 // ---------- Main ----------
 
 function parseRuns(): number {
-  const { values } = parseArgs({ options: { runs: { type: "string", default: "1" } } });
-  const runs = Number(values.runs);
-  if (!Number.isInteger(runs) || runs < 1) throw new Error("--runs must be a positive integer");
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: { runs: { type: "string", default: "1" } },
+  });
+  const runs = Number(positionals[0] ?? values.runs);
+  if (!Number.isInteger(runs) || runs < 1) throw new Error("The number of runs must be a positive integer, e.g. npm run eval 3");
   return runs;
 }
 

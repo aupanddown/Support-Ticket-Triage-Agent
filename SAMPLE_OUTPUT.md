@@ -1,6 +1,6 @@
 # Sample output
 
-Real results for the three sample tickets: the first run of `npm run eval -- --runs 3` with `gpt-5.4-mini`, the same agent and policy as `npm run triage`. Model output varies between runs. In this run two checks failed: the T1 reply says the charges are "captured transactions, not just pending authorizations", which is correct but contains the word the check looks for; and the T2 internal note does not mention the 1-hour response SLA.
+Real results for the three sample tickets: the first run of `npm run eval 3` with `gpt-5.4-mini`, the same agent and policy as `npm run triage`. Model output varies between runs. In this run two checks failed: the T1 reply says the charges are "captured transactions, not just pending authorizations", which is correct but contains the word the check looks for; and the T2 internal note does not mention the 1-hour response SLA.
 
 ## T1: triple charge, presentation in 2 hours
 

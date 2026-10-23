@@ -1,34 +1,30 @@
 # Write-up: Support Ticket Triage Agent
 
-## 1. Architecture decisions, and why
+## 1. Architecture decisions
 
-**I let the model understand, and let code decide anything risky.** The GPT model is good at reading a messy thread and replying in the customer's tone, but I don't trust it with the last word on money or outages. So after the model answers, fixed rules in code check the result, and they can only make it safer: a payment problem goes to a person in Billing, an outage goes to the engineering team, and nothing is sent automatically when the model is unsure. Every change a rule makes is logged in the result.
+The GPT model handles the parts that need language understanding: reading the whole thread, classifying the ticket, searching help articles and drafting a reply. I don't let it make the final call on anything risky, like money or an outage. After the model answers, a set of rules in code checks the result and can only make it safer. A payment problem always goes to Billing, an outage goes to the engineering team, and nothing is auto-sent when the model's confidence is low. Any change a rule makes is recorded in the result, so the support team can see why.
 
-**The rules trust data, not the model's words.** In my first version, some rules only worked if the model chose to call the billing tool. I moved those lookups into code: the agent reads the customer's account and billing before the model starts, so "paid, but the upgrade failed" is a fact the rules can rely on.
+In my first version, some rules depended on the model calling the billing tool, and nothing guaranteed it would. I changed it so the agent loads the customer's account and billing data before calling the model. That way a fact like "paid, but the upgrade failed" comes from data and the rules can rely on it.
 
-**I kept the loop small on purpose.** Four tools (customer history, help articles, billing, service status) that only read data, and only for the ticket's own customer. The model gets at most 5 turns, and its answer must follow a schema: OpenAI structured outputs enforce it, and Zod checks it again before use. I didn't use an agent framework: for one ticket and four tools, a short loop of my own is easier to read, debug and test.
+There are four tools: customer history, help article search, billing and service status. All of them are read-only and only return data for the customer on the ticket. The model has a limit of 5 turns, and its answer has to match a schema (OpenAI structured outputs, checked again with Zod). I wrote the loop myself instead of using an agent framework. With one ticket and four tools it is short enough to read in one go, and easier to debug.
 
-**Built to change.** A new tool is one file plus one line in the tool list. The OpenAI client sits behind a small interface, so all 193 tests run without a key using a fake model. That let me test timeouts, broken output and prompt injection offline.
+Adding a tool means adding one file and registering it in the tool list. The OpenAI client is behind a small interface, so the tests (193 at the moment) run with a fake model and no API key. This is how I tested timeouts, broken output and prompt injection.
 
-## 2. What could go wrong, and how it is handled
+## 2. What could go wrong and how I handle it
 
-These are the failures I worried about most:
+- **Promising a refund.** The prompt says not to, and no tool can move money anyway. Billing tickets go to a person who reviews the draft. If an auto-reply mentions money, a rule replaces it or sends the ticket to a person.
+- **Replying in the wrong language.** A rule checks that the reply uses the customer's script (for example Thai). If it doesn't, the ticket goes to a person.
+- **Escalating too much.** The rules look at the classification and account data instead of keywords, so a message like "no one can tell me how to export" isn't treated as an emergency.
+- **Made-up help articles.** I only keep articles that the search tool actually returned.
+- **OpenAI is down or slow.** There is a timeout and a few retries. After that the ticket goes to a person with the reason. A wrong API key or model name stops the run with a clear error.
+- **Prompt injection** ("ignore your instructions..."). The ticket text is passed as data, the tools can't change anything, and account facts like an unpaid upgrade or an Enterprise outage block auto-replies no matter what the model was told.
 
-| What could go wrong | What the agent does |
-|---|---|
-| The reply promises a refund | The prompt forbids it and no tool can move money. Money tickets go to a person, who reads the draft first. If an automatic reply mentions money, a rule replaces it or hands it to a person. |
-| Wrong reply language | A rule checks the reply uses the customer's alphabet (e.g. Thai); if not, a person takes over. |
-| Too many escalations | Rules use the classification and account data, not alarming words, so "no one can tell me how to export" is not an emergency. |
-| Invented help articles | Only articles the search tool really returned are kept. |
-| OpenAI down or slow | Limited wait and retries, then the ticket goes to a person with the reason. A wrong key or model stops with a clear message. |
-| "Ignore your instructions" in a ticket | The ticket is passed as data, tools only read, and account facts (an unpaid upgrade, an Enterprise outage) block automatic replies whatever the model was told. |
+What still isn't solid is the wording. The same ticket can get a slightly different reply or note on each run, for example the note sometimes misses the 1-hour SLA. Decision and team have been stable in my runs; urgency was off once (T3 rated medium instead of low).
 
-The weak spot I still see is wording: the same ticket can get a slightly different reply or internal note on each run (for example, the note sometimes leaves out the 1-hour SLA). Decisions and teams have been stable in my runs; wording needs the measurement below.
+## 3. How I would evaluate it in production
 
-## 3. How I would measure it in production
-
-- **Test set with known answers** (`npm run eval`): urgency, decision, team, language, help articles, key facts in the note and reply wording, with policy rules checked separately. I run each ticket several times, because a check that passes only sometimes needs attention. It runs on every prompt or model change, and real tickets are added over time. Real results are in SAMPLE_OUTPUT.md.
-- **Override rate:** how often staff change the urgency, team or decision, or rewrite the draft. This is the number I would watch first.
-- **Escalation accuracy:** how many escalated tickets needed a person, and how many that needed one were missed; plus response time and customer satisfaction versus manual triage.
-- **Spot checks** of automatic replies, more often when confidence is low.
-- **Monitoring:** tool calls, rule changes and fallbacks are logged per ticket. If rules start correcting the model more often, the model or prompt has got worse.
+- **Eval set** (`npm run eval`): checks urgency, decision, team, language, help articles and key facts in the note and reply, with the policy rules tested separately. I run each ticket several times since a check that only passes sometimes is a problem too. It should run on every prompt or model change, and real tickets get added over time. Results from my runs are in SAMPLE_OUTPUT.md.
+- **Override rate:** how often support staff change the urgency, team or decision, or rewrite the draft. This is the first number I would look at.
+- **Escalation accuracy:** how many escalated tickets really needed a person, and how many that needed one were missed. Also response time and CSAT compared with manual triage.
+- **Spot checks** on auto-replies, more of them when confidence is low.
+- **Logging:** tool calls, rule changes and fallbacks for each ticket. If the rules start correcting the model more often, something in the model or prompt has gotten worse.

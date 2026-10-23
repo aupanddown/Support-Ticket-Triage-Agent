@@ -1,18 +1,18 @@
 # Support Ticket Triage Agent
 
-An AI agent that triages customer support tickets with an OpenAI GPT model. For each ticket it:
+This is my take on the support ticket triage assignment: an agent that reads a customer's ticket and works out what should happen next, using an OpenAI GPT model. For each ticket it:
 
-1. classifies urgency: `critical`, `high`, `medium` or `low`
-2. extracts key information: product, issue types, customer sentiment, language
-3. searches a knowledge base for articles that help answer it
-4. decides the next action: `auto_respond`, `route_to_specialist` or `escalate_to_human`, with the team that owns it
-5. drafts a reply in the customer's language and an internal note for the support team
+1. decides how urgent it is: `critical`, `high`, `medium` or `low`
+2. pulls out the key information: product, issue types, how the customer feels, and their language
+3. searches the help center for articles that answer it
+4. picks the next step: `auto_respond`, `route_to_specialist` or `escalate_to_human`, and the team that should own it
+5. drafts a reply in the customer's language, plus an internal note for whoever picks it up
 
-It runs as a terminal command and processes the three sample tickets in `data/tickets.json` (T1, T2, T3).
+You run it from the terminal on the three sample tickets from the assignment (T1, T2 and T3, in `data/tickets.json`).
 
 ## Setup
 
-You need **Node.js 22.12 or newer** and **your own OpenAI API key**. No key is included in this repository.
+You'll need **Node.js 22.12 or newer** and **your own OpenAI API key**. I haven't included a key in the repo.
 
 **1. Install the dependencies**
 
@@ -28,48 +28,48 @@ Copy the example settings file:
 cp .env.example .env
 ```
 
-On Windows use `copy .env.example .env` (cmd) or `Copy-Item .env.example .env` (PowerShell).
+On Windows it's `copy .env.example .env` (cmd) or `Copy-Item .env.example .env` (PowerShell).
 
-Then open `.env` and put your key after `OPENAI_API_KEY=`:
+Then open `.env` and paste your key after `OPENAI_API_KEY=`:
 
 ```
 OPENAI_API_KEY=sk-...your key...
 ```
 
-That is all. The model defaults to `gpt-5.4-mini`; to use another one, set `OPENAI_MODEL` in `.env` (it must support function calling with structured outputs, for example `gpt-4.1-mini`).
+That's it. I used `gpt-5.4-mini` by default. If you want a different model, set `OPENAI_MODEL` in `.env`; it needs to support function calling with structured outputs (`gpt-4.1-mini` works, for example).
 
-You can also skip the `.env` file and pass the key on the command line: `OPENAI_API_KEY=sk-... npm run triage -- --all` (PowerShell: `$env:OPENAI_API_KEY="sk-..."; npm run triage -- --all`).
+If you'd rather not create a `.env` file, you can pass the key on the command line instead: `OPENAI_API_KEY=sk-... npm run triage all` (in PowerShell: `$env:OPENAI_API_KEY="sk-..."; npm run triage all`).
 
 ## Run
 
-Run these from the project folder.
+From the project folder:
 
-**Triage all three sample tickets:**
-
-```bash
-npm run triage -- --all
-```
-
-**Triage one ticket** (`T1`, `T2` or `T3`):
+**All three sample tickets:**
 
 ```bash
-npm run triage -- --ticket T1
+npm run triage all
 ```
 
-**See each tool the agent calls** while it works:
+**Just one ticket** (`T1`, `T2` or `T3`):
 
 ```bash
-npm run triage -- --ticket T2 --verbose
+npm run triage T1
 ```
 
-The result is printed as JSON, one object per ticket. Real results for T1, T2 and T3 are in [SAMPLE_OUTPUT.md](SAMPLE_OUTPUT.md).
+**Watch the tools it calls** as it works:
 
-If the key, the model or the account's credit is rejected, the command stops and says what to check. Other problems (a timeout, an invalid answer from the model) do not crash it: that ticket is handed to a human with the reason.
+```bash
+npm run triage T2 verbose
+```
+
+You get JSON back, one object per ticket. If you want to see what that looks like before spending any credit, my own results for T1, T2 and T3 are in [SAMPLE_OUTPUT.md](SAMPLE_OUTPUT.md).
+
+If OpenAI rejects the key, the model name or the account's credit, the command stops and tells you what to check. Anything else that goes wrong (a timeout, an answer that doesn't fit the format) doesn't crash it: that ticket gets handed to a person, with the reason.
 
 ## Check that it works
 
 ```bash
-npm test             # 193 tests, offline: they use a scripted fake model, no API key needed
+npm test             # 193 tests that run offline with a scripted fake model, so no API key needed
 npm run typecheck
 ```
 
@@ -77,11 +77,11 @@ npm run typecheck
 
 | Command | What it does |
 |---|---|
-| `npm run triage -- --file path.json` | Triage your own file (one ticket or a list, same format as `data/tickets.json`) |
-| `npm run tools:schema` | Print every tool definition exactly as the model receives it |
-| `npm run eval` | Run the real agent on T1-T3 and compare with the expected results in `data/golden.json` (add `-- --runs 3` to repeat each ticket) |
+| `npm run triage file path.json` | Triage your own file (one ticket or a list, in the same format as `data/tickets.json`) |
+| `npm run tools:schema` | Print every tool definition exactly as the model sees it |
+| `npm run eval` | Run the real agent on T1-T3 and compare it with the answers I expect in `data/golden.json`. `npm run eval 3` runs each ticket 3 times, since results vary between runs |
 | `npm run serve` | Start an HTTP API: `POST /triage` with one ticket, `GET /health` |
-| `npm run chat` | Interactive mode: pick T1, T2 or T3 and add follow-up messages as the customer |
+| `npm run chat` | Interactive mode: pick T1, T2 or T3, then add follow-up messages as the customer and see how the triage changes |
 
 ## How it works
 
@@ -92,25 +92,29 @@ ticket ──> lookups (customer history, billing) ──> LLM <──> tools (r
                           zod validation ──> guardrail policy ──> result (JSON)
 ```
 
-- **Agent** (`src/agent.ts`): looks up the customer's history and billing, then lets the model call tools (at most 5 model calls), validates the answer with zod and applies the policy. Any failure ends in a safe hand-over to a human with the reason.
-- **System prompt** (`src/prompts/system_prompt.md`): the instructions driving the agent.
-- **Tools** (`src/tools/`): customer history, knowledge base search, billing, service status. All read-only, mocked with JSON files in `data/`, and only allowed to read the ticket's own customer.
-- **Guardrail policy** (`src/policy/`): deterministic rules applied after the model. They can only make the outcome safer, and every change is logged in `guardrails_applied` and the internal note.
+The model does the reading and writing; plain code makes the risky calls. In more detail:
 
-| Rule | What it guarantees |
+- **Agent** (`src/agent.ts`): looks up the customer's history and billing first, then lets the model call tools (5 model calls at most), checks its answer with zod and applies the policy. If anything fails, the ticket goes to a person with the reason.
+- **System prompt** (`src/prompts/system_prompt.md`): the instructions the model works from.
+- **Tools** (`src/tools/`): customer history, help article search, billing and service status. They only read data (mocked as JSON files in `data/`) and can only see the customer on the ticket.
+- **Guardrail policy** (`src/policy/`): rules that run after the model. They can only make the result safer, never riskier, and each change is logged in `guardrails_applied` and in the internal note.
+
+These are the rules, in the order they run:
+
+| Rule | What it makes sure of |
 |---|---|
-| `verified_kb_articles` | Only knowledge base articles the tool really returned are cited |
-| `money_to_billing` | A billing dispute, or a payment taken without the plan being activated, goes to a person in Billing at high urgency or more |
-| `no_refund_promise` | A reply that promises a refund, credit or compensation is replaced with a safe reply |
+| `verified_kb_articles` | Only help articles the search tool really returned are cited |
+| `money_to_billing` | A billing dispute, or a payment taken without the plan being activated, goes to a person in Billing at high urgency or above |
+| `no_refund_promise` | A reply that promises a refund, credit or compensation is swapped for a safe one |
 | `money_reply_reviewed` | An automatic reply that mentions money is checked by a person first |
 | `enterprise_outage_critical` | An Enterprise outage is critical and goes to the incident team |
-| `outage_to_engineering` | Any outage goes to the incident team, at high urgency or more |
+| `outage_to_engineering` | Any outage goes to the incident team, at high urgency or above |
 | `no_auto_reply_during_incident` | No automatic reply to an Enterprise customer while their region has an incident |
 | `critical_to_human` | A critical ticket always goes to a person |
-| `low_confidence` | Confidence below 0.7 is never answered automatically |
-| `auto_respond_requirements` | Automatic replies only for low or medium urgency, backed by a knowledge base article |
-| `reply_language` | The reply is in the customer's writing system (e.g. Thai), otherwise a person takes over |
-| `team_assigned` | Every ticket that needs a person has an owning team; bug reports and feature requests reach Product |
+| `low_confidence` | Below 0.7 confidence, nothing is answered automatically |
+| `auto_respond_requirements` | Automatic replies only for low or medium urgency, and only when a help article backs them up |
+| `reply_language` | The reply is in the customer's alphabet (e.g. Thai); if not, a person takes over |
+| `team_assigned` | Every ticket that needs a person has a team, and bug reports and feature requests reach Product |
 
 ## Project structure
 
@@ -124,16 +128,16 @@ src/
   config.ts              settings from .env
   llm/client.ts          OpenAI client behind a small interface (tests use a fake)
   cli.ts                 the npm run triage command
-data/                    sample tickets and mock data (customers, billing, status, knowledge base)
+data/                    sample tickets and mock data (customers, billing, status, help articles)
 tests/                   offline tests
-WRITEUP.md               architecture, risks and evaluation
+WRITEUP.md               my architecture decisions, risks and how I'd evaluate it
 ```
 
-**Adding a tool:** create a file in `src/tools/` with `defineTool({ name, description, args, handler })` and add it to `TOOLS` in `src/tools/index.ts`. The JSON Schema for the model is generated from the zod `args`.
+**Adding a tool:** create a file in `src/tools/` with `defineTool({ name, description, args, handler })` and add it to `TOOLS` in `src/tools/index.ts`. The JSON Schema the model sees is generated from the zod `args`, so there's nothing else to keep in sync.
 
-## Assumptions
+## Assumptions I made
 
-- Customers, billing, service status and the knowledge base are mock JSON files consistent with the sample tickets.
-- Teams are `Billing`, `Engineering_Incident`, `Product` and `Support`.
-- No tool can issue refunds, change plans or send messages: decisions about money are made by people.
-- Knowledge base search uses English keywords (the model translates Thai queries).
+- The assignment didn't come with customer, billing, status or help center data, so I made mock JSON files that are consistent with the sample tickets.
+- I assumed four teams: `Billing`, `Engineering_Incident`, `Product` and `Support`.
+- No tool can refund, change a plan or send a message. Decisions about money stay with people.
+- Help article search works on English keywords; for a Thai ticket, the model translates its search terms.
