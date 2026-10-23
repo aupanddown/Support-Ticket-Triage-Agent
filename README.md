@@ -42,8 +42,8 @@ If the API key or model does not work, the agent does not crash: each ticket is 
 ```bash
 npm run triage -- --ticket T1            # one sample ticket (T1, T2 or T3)
 npm run triage -- --all                  # all sample tickets
-npm run triage -- --file examples/ticket.json
 npm run triage -- --all --verbose        # also print each tool call
+npm run triage -- --file path/to/tickets.json   # your own file: one ticket or an array
 ```
 
 Results are printed to stdout as JSON; progress and tool calls go to stderr, so `npm run -s triage -- --all > results.json` gives clean JSON.
@@ -65,12 +65,12 @@ npm run serve
 | Method | Path | Body | Response |
 |---|---|---|---|
 | `GET` | `/health` | | `{ "status": "ok" }` |
-| `POST` | `/triage` | a ticket (see `examples/ticket.json`) | `TriageResult`, or `400` with details if the ticket is invalid |
+| `POST` | `/triage` | one ticket, in the same shape as each item of `data/tickets.json` | `TriageResult`, or `400` with details if the ticket is invalid |
+
+Example: send sample ticket T1 (the first item of `data/tickets.json`) to the running server:
 
 ```bash
-curl -s -X POST http://127.0.0.1:3000/triage \
-  -H "content-type: application/json" \
-  -d @examples/ticket.json
+node -e "process.stdout.write(JSON.stringify(require('./data/tickets.json')[0]))" | curl -s -X POST http://127.0.0.1:3000/triage -H "content-type: application/json" -d @-
 ```
 
 On Windows PowerShell, use `curl.exe` instead of `curl`. Set `HOST=0.0.0.0` to accept connections from other machines.
@@ -110,7 +110,6 @@ src/
   server.ts              Fastify API
 scripts/eval.ts          evaluation against the golden set (real API)
 data/                    sample tickets, mock systems, KB articles, golden.json
-examples/ticket.json     an extra ticket for --file and curl
 tests/                   vitest tests (agent, policy, injection, tools, server, ...)
 ```
 
