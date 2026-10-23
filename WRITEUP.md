@@ -2,8 +2,8 @@
 
 ## 1. Architecture decisions and why
 
-- **LLM for understanding, code for safety.** The model reads the thread, calls tools, classifies the ticket (`issue_types`, `product` enums) and drafts the reply. A deterministic policy (`policy.ts`) has the final say on risky outcomes: money disputes go to a human in Billing, Enterprise outages and every `critical` ticket go to a person, low confidence is never auto-sent, refund promises are replaced. Rules use the classification (which can only add escalations) and tool facts, never the ticket's wording, and every change is logged.
-- **Small tool-calling loop.** Four read-only tools scoped to the ticket's customer, at most 5 model calls (the last one without tools, forcing an answer), structured output validated with zod.
+- **LLM for understanding, code for safety.** The model reads the thread, calls tools, classifies the ticket (`issue_types`, `product` enums) and drafts the reply. A deterministic policy (`src/policy/`) has the final say on risky outcomes: money disputes go to a human in Billing, outages go to the incident team (Enterprise ones as critical), low confidence is never auto-sent, refund promises are replaced. Rules use the classification (which can only add escalations) and tool facts, never the ticket's wording, and every change is logged.
+- **Small tool-calling loop.** The lookups the policy relies on (customer history, billing) are made in code before the first model call, so they never depend on the model; then the model calls tools as needed: four read-only tools scoped to the ticket's customer, at most 5 model calls (the last one without tools), structured output validated with zod.
 - **Tool registry.** A tool is one file (`defineTool`: zod args, handler, optional `facts` for the policy) plus one registry line; the JSON Schema for the model is generated from zod.
 - **Injectable LLM client.** The agent depends on a small `LlmClient` interface, so all tests run offline with a scripted fake, including failures that are hard to reproduce with the real API.
 
@@ -17,11 +17,10 @@
 | Invented KB articles | Only IDs the KB tool really returned are kept |
 | OpenAI outage or slow response | Timeout, retries with backoff, then fail-safe escalation with the reason; a rejected key or model stops the CLI with a clear error |
 | Prompt injection or a mislabeled ticket | Ticket sent as escaped JSON in `<ticket>` tags, treated as data; read-only tools; refund promises are replaced, and tool evidence (an unresolved payment, an Enterprise incident) blocks automatic replies whatever the labels say |
-| Cost and latency | Small default model, input limits; next: queue, prompt caching, Batch API |
 
 ## 3. How to evaluate in production
 
-- **Golden set regression** (`npm run eval`): urgency, decision, teams, issue types, language, KB use, key facts in the note and a reply rubric, with `--runs N` to expose unstable checks. Snapshot on the sample tickets (`gpt-5.4-mini`, 2026-10-23, 3 runs): 65/69, every miss in a single check of one run except T3 urgency (`medium` instead of `low` in 2 of 3 runs); the rubric caught a T1 reply saying "pending" and a T2 reply mentioning the status page once each. Policy invariants are reported apart from the score, since they hold by construction. In production the set grows with real tickets.
+- **Golden set regression** (`npm run eval`): urgency, decision, teams, issue types, language, KB use, key facts in the note and a reply rubric, with `--runs N` to expose unstable checks. Snapshot on the sample tickets (`gpt-5.4-mini`, 2026-10-24, 3 runs): 65/69. Urgency, decision and team were right in every run; the misses are reply wording: the T3 reply never said the possible bug was passed on (0 of 3), and one T1 reply said "pending". Policy invariants are reported apart from the score. In production the set grows with real tickets.
 - **Human override rate:** how often agents change the urgency, team or decision, or rewrite the draft.
 - **Escalation precision and recall**, time to first response and CSAT versus manual handling.
 - **Sampled review** of auto-responses, weighted toward low confidence.

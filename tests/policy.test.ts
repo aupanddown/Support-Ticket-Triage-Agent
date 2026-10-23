@@ -6,7 +6,7 @@ import {
   mentionsMoneyInReply,
   type PolicyFacts,
   promisesRefund,
-} from "../src/policy.js";
+} from "../src/policy/index.js";
 import { Decision, type IssueType, Urgency, type Ticket, type TriageResult } from "../src/schemas.js";
 import { makeResult, makeTicket, sampleTicket } from "./fixtures.js";
 
@@ -44,13 +44,13 @@ describe("applyPolicy", () => {
   it("records what each rule changed", () => {
     const result = run(dispute({ urgency: "medium" }), sampleTicket("T1"));
     expect(result.guardrails_applied[0]).toBe(
-      "R1_money_to_billing: urgency medium -> high; decision auto_respond -> escalate_to_human; route_team null -> Billing",
+      "money_to_billing: urgency medium -> high; decision auto_respond -> escalate_to_human; route_team null -> Billing",
     );
   });
 
   it("adds every change to the internal note, so the note matches the final routing", () => {
     const result = run(dispute({ internal_note: "Route to Support." }), sampleTicket("T1"));
-    expect(result.internal_note).toMatch(/^Route to Support\.\n\[Policy\] R1_money_to_billing: .*route_team null -> Billing/);
+    expect(result.internal_note).toMatch(/^Route to Support\.\n\[Policy\] money_to_billing: .*route_team null -> Billing/);
   });
 
   it("can only make the outcome safer (never lowers urgency, never creates an auto_respond)", () => {
@@ -96,7 +96,7 @@ describe("R1: money matters go to a human in Billing", () => {
     "I was not charged twice, just checking how billing works",
     "ขอคืนเงินด้วยครับ",
   ])("follows the classification, never the wording of the ticket: %s", (text) => {
-    expect(ruleIds(run(makeResult(), makeTicket([text])))).not.toContain("R1_money_to_billing");
+    expect(ruleIds(run(makeResult(), makeTicket([text])))).not.toContain("money_to_billing");
     expect(run(dispute, makeTicket([text])).route_team).toBe("Billing");
   });
 
@@ -148,7 +148,7 @@ describe("R1: money matters go to a human in Billing", () => {
     const reply = "Our refund policy allows a partial amount back in some cases.";
     const result = run(makeResult({ customer_reply_draft: reply }));
     expect(result).toMatchObject({ decision: "escalate_to_human", route_team: "Billing", customer_reply_draft: reply });
-    expect(ruleIds(result)).toContain("R1_money_reply_reviewed");
+    expect(ruleIds(result)).toContain("money_reply_reviewed");
   });
 
   it.each([
@@ -170,7 +170,7 @@ describe("R1: money matters go to a human in Billing", () => {
     );
     expect(promisesRefund(result.customer_reply_draft)).toBe(false);
     expect(result.customer_reply_draft).toMatch(/Billing team/);
-    expect(result.internal_note).toMatch(/\[Policy\] R1_no_refund_promise/);
+    expect(result.internal_note).toMatch(/\[Policy\] no_refund_promise/);
   });
 });
 
@@ -187,7 +187,7 @@ describe("R2: Enterprise outage is a critical incident", () => {
   it("makes T2 critical and escalates it to Engineering_Incident", () => {
     const result = run(llmT2, sampleTicket("T2"));
     expect(result).toMatchObject({ urgency: "critical", decision: "escalate_to_human", route_team: "Engineering_Incident" });
-    expect(ruleIds(result)).toEqual(["R2_enterprise_outage"]);
+    expect(ruleIds(result)).toEqual(["enterprise_outage_critical"]);
   });
 
   it("fires on the model's outage classification even when the text gives no hint", () => {
@@ -204,20 +204,20 @@ describe("R2: Enterprise outage is a critical incident", () => {
   ])("follows the model's classification, not the wording: %s", (text) => {
     // The model classified these as how-to questions; words like "nobody" or "down" do not page the incident team.
     expect(ruleIds(run(makeResult(), makeTicket([text], "Enterprise plan, 45 seats")))).not.toContain(
-      "R2_enterprise_outage",
+      "enterprise_outage_critical",
     );
   });
 
   it("does not apply to a non-Enterprise customer", () => {
     const ticket = makeTicket(["The site is down for everyone"], "Pro plan, 5 months customer");
     const result = run(makeResult({ extracted: issues("outage"), decision: "route_to_specialist", route_team: "Support" }), ticket);
-    expect(ruleIds(result)).not.toContain("R2_enterprise_outage");
+    expect(ruleIds(result)).not.toContain("enterprise_outage_critical");
   });
 
   it("reads the plan name, not any mention of Enterprise", () => {
     const outageResult = makeResult({ extracted: { ...makeResult().extracted, issue_types: ["outage"] } });
     const ticket = makeTicket(["It is slow"], "Pro plan, evaluating an Enterprise upgrade");
-    expect(ruleIds(run(outageResult, ticket))).not.toContain("R2_enterprise_outage");
+    expect(ruleIds(run(outageResult, ticket))).not.toContain("enterprise_outage_critical");
   });
 
   it("treats the customer as Enterprise if either the ticket or customer history says so", () => {
@@ -242,12 +242,34 @@ describe("R2: Enterprise outage is a critical incident", () => {
   });
 });
 
-describe("R2_no_auto_reply_during_incident", () => {
+describe("outage_to_engineering: any outage goes to the incident team", () => {
+  it("escalates a non-Enterprise outage to Engineering_Incident at least high, keeping the old team as follow-up", () => {
+    const outage = makeResult({
+      urgency: "medium",
+      route_team: "Support",
+      extracted: { ...makeResult().extracted, issue_types: ["outage"] },
+    });
+    const result = run(outage, makeTicket(["Nothing loads"], "Pro plan"));
+    expect(result).toMatchObject({
+      decision: "escalate_to_human",
+      route_team: "Engineering_Incident",
+      urgency: "high",
+      follow_up_teams: ["Support"],
+    });
+  });
+});
+
+describe("no_auto_reply_during_incident", () => {
   const degraded = { customerRegion: "asia", degradedRegions: ["asia"] };
 
   it("holds an Enterprise auto-reply for a person while the customer's region is degraded", () => {
     const result = run(makeResult(), makeTicket(["How do I export to PDF?"], "Enterprise plan"), degraded);
     expect(result).toMatchObject({ decision: "route_to_specialist", route_team: "Support", urgency: "low" });
+  });
+
+  it("keeps the team the model chose", () => {
+    const result = run(makeResult({ route_team: "Product" }), makeTicket(["How do I export?"], "Enterprise plan"), degraded);
+    expect(result).toMatchObject({ decision: "route_to_specialist", route_team: "Product" });
   });
 
   it("does nothing for other plans or healthy regions", () => {
@@ -302,7 +324,7 @@ describe("R5: reply written in the ticket's script", () => {
     const result = run(llm, sampleTicket("T2"));
     expect(detectScript(result.customer_reply_draft)).toBe("thai");
     expect(result.extracted.language).toBe("th");
-    expect(ruleIds(result)).toContain("R5_reply_language");
+    expect(ruleIds(result)).toContain("reply_language");
   });
 
   it("keeps the model's label for languages it cannot check (e.g. Japanese or Spanish)", () => {

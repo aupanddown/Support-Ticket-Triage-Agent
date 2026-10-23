@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { triageTicket } from "../src/agent.js";
 import { buildUserMessage } from "../src/prompts/system.js";
-import { applyPolicy, promisesRefund } from "../src/policy.js";
+import { applyPolicy, promisesRefund } from "../src/policy/index.js";
 import { FakeLlmClient, finalAnswer, toolCalls } from "./fakeLlmClient.js";
 import { makeResult, makeTicket } from "./fixtures.js";
 
@@ -42,7 +42,7 @@ describe("prompt injection in ticket text", () => {
 
   it("records the guardrails that fired", () => {
     const ids = result.guardrails_applied.map((entry) => entry.split(":")[0]);
-    expect(ids).toContain("R1_no_refund_promise");
+    expect(ids).toContain("no_refund_promise");
   });
 
   it("also blocks a compensation promise when the ticket never mentions money", () => {

@@ -57,16 +57,26 @@ describe("agent loop", () => {
 
     // First request: system prompt, the whole ticket thread, and every tool definition.
     const [first, second] = llm.requests;
-    expect(first!.messages.map((m) => m.role)).toEqual(["system", "user"]);
+    // System prompt, the ticket, then the lookups the agent made itself (customer history and billing).
+    expect(first!.messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "tool", "tool"]);
     expect(first!.messages[1]!.content).toContain("schedule dark mode");
     expect(first!.tools.map((t) => t.name)).toContain("search_knowledge_base");
 
     // Second request: the assistant's tool calls followed by one tool message per call.
     const toolMessages = second!.messages.filter((m) => m.role === "tool");
-    expect(toolMessages).toHaveLength(2);
-    const kbReply = JSON.parse(toolMessages[1]!.content);
+    expect(toolMessages).toHaveLength(4); // 2 prefetched + 2 requested by the model
+    const kbReply = JSON.parse(toolMessages[3]!.content);
     expect(kbReply.ok).toBe(true);
     expect(kbReply.data[0].id).toBe("KB-101");
+  });
+
+  it("catches a mislabeled ticket with the prefetched billing facts, even if the model calls no tool", async () => {
+    // The fooled model calls T1 a how-to and answers right away; the agent had already looked up billing.
+    const llm = new FakeLlmClient([finalAnswer({ ...T3_OUTPUT, follow_up_teams: [], extracted: { ...T3_OUTPUT.extracted, issue_types: ["how_to"] } })]);
+
+    const result = await triageTicket(sampleTicket("T1"), { llm });
+
+    expect(result).toMatchObject({ decision: "escalate_to_human", route_team: "Billing", urgency: "high" });
   });
 
   it("tidies the reply: plain quotes and no internal team IDs", async () => {
@@ -87,7 +97,11 @@ describe("agent loop", () => {
 
     await triageTicket(sampleTicket("T3"), { llm, onEvent: (e) => events.push(e) });
 
-    expect(events).toEqual([expect.objectContaining({ type: "tool_call", result: expect.objectContaining({ ok: true }) })]);
+    expect(events.map((e) => (e.type === "tool_call" ? e.call.name : e.type))).toEqual([
+      "get_customer_history", // prefetched
+      "get_billing_transactions", // prefetched
+      "get_customer_history", // requested by the model
+    ]);
   });
 
   it("applies the policy: a KB ID that was never retrieved does not count", async () => {
@@ -213,13 +227,16 @@ describe("fail safe: always escalate to a human, never throw", () => {
     const result = await triageTicket(sampleTicket("T3"), { llm, onEvent: (e) => events.push(e) });
 
     expect(result.decision).toBe("escalate_to_human");
-    expect(events).toEqual([{ type: "fail_safe", reason: "OpenAI rejected the request (401)", configError: true }]);
+    expect(events.filter((e) => e.type === "fail_safe")).toEqual([
+      { type: "fail_safe", reason: "OpenAI rejected the request (401)", configError: true },
+    ]);
   });
 
-  it("hands a failed ticket to a person in Support, with a reply in the customer's language", async () => {
+  it("hands a failed ticket to a person, still using the prefetched facts", async () => {
     // Without the model's classification there is nothing to route on: a person triages it.
+    // The prefetched billing lookup still found T1's unresolved payment, so it goes to Billing.
     const t1 = await triageTicket(sampleTicket("T1"), { llm: new FakeLlmClient([new Error("API down")]) });
-    expect(t1).toMatchObject({ decision: "escalate_to_human", route_team: "Support", urgency: "high" });
+    expect(t1).toMatchObject({ decision: "escalate_to_human", route_team: "Billing", urgency: "high" });
 
     const t2 = await triageTicket(sampleTicket("T2"), { llm: new FakeLlmClient([new Error("API down")]) });
     expect(t2).toMatchObject({ decision: "escalate_to_human", route_team: "Support", urgency: "high" });

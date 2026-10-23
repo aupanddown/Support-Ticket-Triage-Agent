@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { detectScript } from "./language.js";
-import { AUTO_RESPOND_MIN_CONFIDENCE, promisesRefund } from "./policy.js";
+import { AUTO_RESPOND_MIN_CONFIDENCE, promisesRefund } from "./policy/index.js";
 import { Decision, IssueType, RouteTeam, Ticket, type TriageResult, Urgency } from "./schemas.js";
 
 // ---------- Golden set format (data/golden.json) ----------

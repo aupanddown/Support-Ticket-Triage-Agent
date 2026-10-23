@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { type ChatMessage, type LlmClient, LlmConfigError } from "./llm/client.js";
-import { applyPolicy, normalizeQuotes, type PolicyFacts, safeReply, safeReplyLanguage } from "./policy.js";
+import { type ChatMessage, type LlmClient, LlmConfigError, type LlmToolCall } from "./llm/client.js";
+import { applyPolicy, normalizeQuotes, type PolicyFacts, safeReply, safeReplyLanguage } from "./policy/index.js";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompts/system.js";
 import { LlmTriageOutput, type Ticket, TriageResult } from "./schemas.js";
 import { executeTool, getToolSpecs, TOOLS, type ToolCall, type ToolResult } from "./tools/index.js";
@@ -24,10 +24,12 @@ export interface AgentOptions {
 /**
  * Triages one ticket.
  *
- * 1. Send the system prompt and the ticket to the LLM, with the tool definitions.
- * 2. While the LLM asks for tools: run them (scoped to this ticket's customer), collect their facts,
+ * 1. Run the lookups the policy relies on (tools marked `prefetch`: customer history, billing) in code,
+ *    so their facts never depend on the model choosing to call them. The model sees them as results.
+ * 2. Send the system prompt, the ticket and those results to the LLM, with the tool definitions.
+ * 3. While the LLM asks for tools: run them (scoped to this ticket's customer), collect their facts,
  *    and send the results back (max `maxIterations` LLM calls).
- * 3. Validate the final answer with zod, then apply the deterministic policy using the facts.
+ * 4. Validate the final answer with zod, then apply the deterministic policy using the facts.
  *
  * Never throws: on any failure (API error, timeout, invalid output, too many iterations)
  * it returns a fail-safe result that escalates to a human and explains why.
@@ -36,11 +38,26 @@ export async function triageTicket(ticket: Ticket, options: AgentOptions): Promi
   const { llm, tools = TOOLS, maxIterations = DEFAULT_MAX_ITERATIONS, onEvent } = options;
   let facts: PolicyFacts = {};
 
+  /** Runs tool calls, records their facts, and returns the messages that report them to the model. */
+  const runTools = async (calls: LlmToolCall[]): Promise<ChatMessage[]> => {
+    const reported: ChatMessage[] = [{ role: "assistant", content: null, toolCalls: calls }];
+    for (const call of calls) {
+      const result = await executeTool(call, tools, { customerId: ticket.customer.id });
+      onEvent?.({ type: "tool_call", call, result });
+      const tool = tools.find((t) => t.name === call.name);
+      if (result.ok && tool?.facts) facts = mergeFacts(facts, tool.facts(result.data));
+      reported.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(result) });
+    }
+    return reported;
+  };
+
   try {
     const messages: ChatMessage[] = [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: buildUserMessage(ticket) },
     ];
+    const prefetch = prefetchCalls(ticket, tools);
+    if (prefetch.length > 0) messages.push(...(await runTools(prefetch)));
     const toolSpecs = getToolSpecs(tools);
 
     for (let iteration = 1; iteration <= maxIterations; iteration++) {
@@ -59,14 +76,7 @@ export async function triageTicket(ticket: Ticket, options: AgentOptions): Promi
         return finalize(result, ticket, facts);
       }
 
-      messages.push({ role: "assistant", content: null, toolCalls: response.calls });
-      for (const call of response.calls) {
-        const result = await executeTool(call, tools, { customerId: ticket.customer.id });
-        onEvent?.({ type: "tool_call", call, result });
-        const tool = tools.find((t) => t.name === call.name);
-        if (result.ok && tool?.facts) facts = mergeFacts(facts, tool.facts(result.data));
-        messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(result) });
-      }
+      messages.push(...(await runTools(response.calls)));
     }
 
     throw new Error(`No final answer after ${maxIterations} LLM calls (max iterations reached)`);
@@ -75,6 +85,17 @@ export async function triageTicket(ticket: Ticket, options: AgentOptions): Promi
     onEvent?.({ type: "fail_safe", reason, configError: error instanceof LlmConfigError });
     return failSafeResult(ticket, reason, facts);
   }
+}
+
+/** Calls for the tools marked `prefetch`, with the ticket's own customer ID. */
+function prefetchCalls(ticket: Ticket, tools: readonly Tool[]): LlmToolCall[] {
+  return tools
+    .filter((tool) => tool.prefetch && tool.customerIdArg)
+    .map((tool) => ({
+      id: `prefetch_${tool.name}`,
+      name: tool.name,
+      arguments: JSON.stringify({ [tool.customerIdArg!]: ticket.customer.id }),
+    }));
 }
 
 function parseLlmOutput(content: string): LlmTriageOutput {

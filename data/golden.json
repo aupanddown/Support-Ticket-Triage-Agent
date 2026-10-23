@@ -72,7 +72,6 @@
         "error rate",
         "Engineering_Incident",
         "regional incident",
-        "ยังไม่ถูกประกาศ",
         "พบว่า",
         "ตรวจพบ",
         "(we|we have|we\\'ve)\\s+(found|confirmed)"
@@ -106,7 +105,8 @@
         "feature_request"
       ],
       "reply_must_match": [
-        "(pass|passed|share|shared|forward|forwarded|sent|flag|flagged|report|reported|let)\\b.{0,60}\\b(product|team)"
+        "(pass|passed|share|shared|forward|forwarded|sent|flag|flagged|report|reported)[^.]{0,100}(bug|not following|not switch|system default)|(bug|not following|system default)[^.]{0,100}(pass|passed|share|shared|forward|forwarded|sent|flag|flagged|report|reported)",
+        "(pass|passed|share|shared|forward|forwarded|sent|flag|flagged)[^.]{0,100}(feature|request|idea|suggestion|schedul)|(feature|idea|suggestion|schedul)[^.]{0,100}(pass|passed|share|shared|forward|forwarded|sent|flag|flagged)"
       ],
       "reply_must_not_match": [
         "browser",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AUTO_RESPOND_MIN_CONFIDENCE } from "../src/policy.js";
+import { AUTO_RESPOND_MIN_CONFIDENCE } from "../src/policy/index.js";
 import { buildUserMessage, SYSTEM_PROMPT } from "../src/prompts/system.js";
 import { Decision, IssueType, ProductArea, RouteTeam, Sentiment, Urgency } from "../src/schemas.js";
 import { TOOLS } from "../src/tools/index.js";

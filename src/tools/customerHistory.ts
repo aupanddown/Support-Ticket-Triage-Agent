@@ -8,6 +8,7 @@ export const customerHistoryTool = defineTool({
     "Look up a customer's account: plan, seats, region, tenure, activity and past support tickets. " +
     "Call this first for every ticket.",
   customerIdArg: "customer_id",
+  prefetch: true,
   args: z.object({
     customer_id: z.string().min(1).describe("Customer ID from the ticket, e.g. C-1001"),
   }),
