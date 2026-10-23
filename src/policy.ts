@@ -76,6 +76,13 @@ const SAFE_REPLIES: Record<Language, { billing: string; general: string }> = {
   },
 };
 
+export type SafeReplyKind = keyof (typeof SAFE_REPLIES)[Language];
+
+/** A pre-approved reply in the customer's language, used whenever the model's draft cannot be trusted. */
+export function safeReply(language: Language, kind: SafeReplyKind): string {
+  return SAFE_REPLIES[language][kind];
+}
+
 // ---------- Small helpers ----------
 
 const URGENCY_RANK: Record<Urgency, number> = { low: 0, medium: 1, high: 2, critical: 3 };
@@ -120,7 +127,7 @@ export const RULES: readonly Rule[] = [
     apply: (result, ctx) => {
       if (!promisesRefund(result.customer_reply_draft)) return result;
       const language = detectLanguage(customerText(ctx.ticket));
-      const safe = { ...result, customer_reply_draft: SAFE_REPLIES[language].billing };
+      const safe = { ...result, customer_reply_draft: safeReply(language, "billing") };
       return addNote(escalate(safe, "Billing"), "Draft reply promised a refund and was replaced with a safe reply.");
     },
   },
@@ -164,7 +171,7 @@ export const RULES: readonly Rule[] = [
       if (detectLanguage(result.customer_reply_draft) !== ticketLanguage) {
         // We cannot translate safely here, so use a safe reply and let a human write the real answer.
         const template = result.route_team === "Billing" ? "billing" : "general";
-        checked = { ...checked, customer_reply_draft: SAFE_REPLIES[ticketLanguage][template] };
+        checked = { ...checked, customer_reply_draft: safeReply(ticketLanguage, template) };
         checked = addNote(escalate(checked), `Draft reply was not in the customer's language (${ticketLanguage}).`);
       }
       return checked;

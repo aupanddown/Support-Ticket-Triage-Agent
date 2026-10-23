@@ -1,0 +1,133 @@
+import { describe, expect, it } from "vitest";
+import { type AgentEvent, DEFAULT_MAX_ITERATIONS, triageTicket } from "../src/agent.js";
+import type { LlmTriageOutput } from "../src/schemas.js";
+import { FakeLlmClient, finalAnswer, toolCalls } from "./fakeLlmClient.js";
+import { sampleTicket } from "./fixtures.js";
+
+/** A good model answer for T3 (dark mode question). */
+const T3_OUTPUT: LlmTriageOutput = {
+  urgency: "low",
+  extracted: { product: "Appearance settings", issue_type: "bug_and_feature_request", sentiment: "positive", language: "en" },
+  decision: "auto_respond",
+  route_team: "Product",
+  kb_articles_used: ["KB-101"],
+  customer_reply_draft: "Hi! Thanks for the details. Settings > Appearance has Light and System Default...",
+  internal_note: "Possible bug: System Default does not follow macOS dark mode. Feature request: scheduled dark mode.",
+  confidence: 0.9,
+};
+
+describe("agent loop", () => {
+  it("runs the requested tools, sends results back, and returns a validated result", async () => {
+    const llm = new FakeLlmClient([
+      toolCalls(
+        { name: "get_customer_history", args: { customer_id: "C-3001" } },
+        { name: "search_knowledge_base", args: { query: "dark mode system default" } },
+      ),
+      finalAnswer(T3_OUTPUT),
+    ]);
+
+    const result = await triageTicket(sampleTicket("T3"), { llm });
+
+    expect(result).toMatchObject({
+      ticket_id: "T3",
+      decision: "auto_respond",
+      kb_articles_used: ["KB-101"],
+      guardrails_applied: [],
+    });
+
+    // First request: system prompt, the whole ticket thread, and every tool definition.
+    const [first, second] = llm.requests;
+    expect(first!.messages.map((m) => m.role)).toEqual(["system", "user"]);
+    expect(first!.messages[1]!.content).toContain("schedule dark mode");
+    expect(first!.tools.map((t) => t.name)).toContain("search_knowledge_base");
+
+    // Second request: the assistant's tool calls followed by one tool message per call.
+    const toolMessages = second!.messages.filter((m) => m.role === "tool");
+    expect(toolMessages).toHaveLength(2);
+    const kbReply = JSON.parse(toolMessages[1]!.content);
+    expect(kbReply.ok).toBe(true);
+    expect(kbReply.data[0].id).toBe("KB-101");
+  });
+
+  it("reports each tool call through onEvent", async () => {
+    const events: AgentEvent[] = [];
+    const llm = new FakeLlmClient([
+      toolCalls({ name: "get_customer_history", args: { customer_id: "C-3001" } }),
+      finalAnswer({ ...T3_OUTPUT, kb_articles_used: [] }),
+    ]);
+
+    await triageTicket(sampleTicket("T3"), { llm, onEvent: (e) => events.push(e) });
+
+    expect(events).toEqual([expect.objectContaining({ type: "tool_call", result: expect.objectContaining({ ok: true }) })]);
+  });
+
+  it("applies the policy: a KB ID that was never retrieved does not count", async () => {
+    // The model claims KB-101 without ever searching, so auto_respond is not allowed (rule 4).
+    const llm = new FakeLlmClient([finalAnswer(T3_OUTPUT)]);
+
+    const result = await triageTicket(sampleTicket("T3"), { llm });
+
+    expect(result.kb_articles_used).toEqual([]);
+    expect(result.decision).toBe("route_to_specialist");
+  });
+
+  it("feeds tool errors back to the model so it can recover", async () => {
+    const llm = new FakeLlmClient([
+      toolCalls({ name: "get_customer_history", args: { customer_id: "WRONG" } }),
+      toolCalls({ name: "get_customer_history", args: { customer_id: "C-3001" } }),
+      finalAnswer({ ...T3_OUTPUT, kb_articles_used: [], decision: "route_to_specialist" }),
+    ]);
+
+    const result = await triageTicket(sampleTicket("T3"), { llm });
+
+    const firstToolReply = llm.requests[1]!.messages.at(-1)!;
+    expect(JSON.parse(firstToolReply.content!)).toMatchObject({ ok: false });
+    expect(result.decision).toBe("route_to_specialist");
+  });
+});
+
+describe("fail safe: always escalate to a human, never throw", () => {
+  it(`stops after ${DEFAULT_MAX_ITERATIONS} LLM calls when the model keeps calling tools`, async () => {
+    const endless = Array.from({ length: 10 }, () =>
+      toolCalls({ name: "get_customer_history", args: { customer_id: "C-3001" } }),
+    );
+    const llm = new FakeLlmClient(endless);
+
+    const result = await triageTicket(sampleTicket("T3"), { llm });
+
+    expect(llm.requests).toHaveLength(DEFAULT_MAX_ITERATIONS);
+    expect(result.decision).toBe("escalate_to_human");
+    expect(result.internal_note).toMatch(/max iterations/);
+    expect(result.guardrails_applied[0]).toMatch(/^fail_safe:/);
+  });
+
+  it("escalates when the output is not JSON", async () => {
+    const llm = new FakeLlmClient([{ type: "final", content: "Sure! This ticket looks urgent." }]);
+    const result = await triageTicket(sampleTicket("T3"), { llm });
+    expect(result.decision).toBe("escalate_to_human");
+    expect(result.internal_note).toMatch(/not valid JSON/);
+  });
+
+  it("escalates when the output does not match the schema", async () => {
+    const llm = new FakeLlmClient([finalAnswer({ ...T3_OUTPUT, urgency: "super urgent" })]);
+    const result = await triageTicket(sampleTicket("T3"), { llm });
+    expect(result.decision).toBe("escalate_to_human");
+    expect(result.internal_note).toMatch(/does not match the schema/);
+  });
+
+  it("escalates on an API error or timeout", async () => {
+    const llm = new FakeLlmClient([new Error("Request timed out.")]);
+    const result = await triageTicket(sampleTicket("T3"), { llm });
+    expect(result).toMatchObject({ decision: "escalate_to_human", confidence: 0, route_team: "Support" });
+    expect(result.internal_note).toContain("Request timed out.");
+  });
+
+  it("still applies the policy to the fail-safe result", async () => {
+    const t1 = await triageTicket(sampleTicket("T1"), { llm: new FakeLlmClient([new Error("API down")]) });
+    expect(t1).toMatchObject({ route_team: "Billing", urgency: "high" });
+
+    const t2 = await triageTicket(sampleTicket("T2"), { llm: new FakeLlmClient([new Error("API down")]) });
+    expect(t2).toMatchObject({ route_team: "Engineering_Incident", urgency: "critical" });
+    expect(t2.extracted.language).toBe("th");
+  });
+});
