@@ -81,6 +81,7 @@ On Windows PowerShell, use `curl.exe` instead of `curl`. Set `HOST=0.0.0.0` to a
 npm test             # all tests, no API key needed (uses a scripted fake LLM)
 npm run typecheck
 npm run eval         # runs the REAL agent on data/golden.json and prints a score table
+npm run eval -- --runs 3   # each case 3 times, and lists checks that did not pass every run
 ```
 
 ## Project structure
@@ -160,7 +161,7 @@ The JSON Schema for the model is generated from the zod schema, arguments are va
 
 ## Sample output
 
-Real results for the three sample tickets from the latest `npm run eval` run with `gpt-5.4-mini` (the same agent and policy as `npm run triage`). Model output varies a little between runs.
+Real results for the three sample tickets from the first run of the latest `npm run eval -- --runs 3` with `gpt-5.4-mini` (the same agent and policy as `npm run triage`). Model output varies a little between runs.
 
 ### T1: triple charge, presentation in 2 hours
 
@@ -170,20 +171,20 @@ Real results for the three sample tickets from the latest `npm run eval` run wit
   "urgency": "critical",
   "extracted": {
     "product": "Billing / Pro upgrade",
-    "issue_type": "duplicate_charge_activation_failed",
+    "issue_type": "duplicate_charge, payment_failed, activation_failed",
     "sentiment": "angry",
     "language": "en"
   },
   "decision": "escalate_to_human",
   "route_team": "Billing",
   "kb_articles_used": [
-    "KB-202",
     "KB-201",
+    "KB-202",
     "KB-203"
   ],
-  "customer_reply_draft": "I’m sorry, Jordan, I can see why you’re frustrated, especially with your presentation in 2 hours.\n\nI found 3 captured Pro upgrade charges on your account and your plan is still showing Free, so this needs Billing review. The Pro plan is not active yet, which is why the export features are still unavailable.\n\nPlease do not open a bank dispute yet if you can avoid it, because disputes can lock the account while they are being investigated. Our Billing team needs to review all three transactions and the failed activation first.\n\nThe charges I found are:\n1. TX-9001, $29.99, captured\n2. TX-9002, $29.99, captured\n3. TX-9003, $29.99, captured\n\nYour case has been handed to the right team now, and they’ll review the charges and activation status as soon as possible.",
-  "internal_note": "Customer on Free plan attempted Pro upgrade 3 times today. Billing lookup shows pending_upgrade target Pro with status activation_failed, detail: payment captured but plan activation did not complete. Transactions captured: TX-9001 ($29.99, 3 hours ago, card 4242), TX-9002 ($29.99, 2 hours ago, card 5511), TX-9003 ($29.99, 1 hour ago, card 5511). Customer is angry, says they need Pro export features for a presentation in 2 hours, and threatened to dispute all charges by end of day if not reversed. KB says do not retry many times, captured charges need Billing review, and disputes can lock the account. Escalate to Billing urgently.",
-  "confidence": 0.98,
+  "customer_reply_draft": "I’m sorry for the trouble, especially with your presentation in 2 hours. I can see that your Pro upgrade attempts captured 3 charges of $29.99, but your account is still on Free because plan activation did not complete.\n\nThe right Billing team has your case and is reviewing the charges now. They will also check why Pro did not activate.\n\nA couple of notes from our help center:\n1. Pending or failed payment attempts can sometimes drop off within 3 to 5 business days, depending on your bank.\n2. Since you now have more than one captured charge, Billing needs to review each transaction before anything else happens.\n3. Please do not open a bank dispute yet, because that can lock the account while the issue is being investigated.\n\nPro includes advanced export features once the plan is active: https://help.company.com/articles/pro-plan-features\n\nWe’ll update you as soon as Billing has reviewed it.",
+  "internal_note": "Free-plan customer in US, 4 months tenure, first support contact. Upgrade to Pro attempted 3 times today. Billing transaction data shows activation_failed and 3 captured charges: TX-9001 $29.99 card 4242, TX-9002 $29.99 card 5511, TX-9003 $29.99 card 5511. Account still Free. Customer is very upset, demanded fix now, has a presentation in 2 hours, and threatened to dispute all charges by end of day. Escalate to Billing immediately due to money involved, duplicate/captured charges, activation failure, and chargeback threat. Also note they repeated attempts with different cards despite KB warning, but this does not reduce urgency.",
+  "confidence": 0.97,
   "guardrails_applied": []
 }
 ```
@@ -195,19 +196,19 @@ Real results for the three sample tickets from the latest `npm run eval` run wit
   "ticket_id": "T2",
   "urgency": "critical",
   "extracted": {
-    "product": "Web App / Platform",
+    "product": "Web App",
     "issue_type": "outage",
-    "sentiment": "angry",
+    "sentiment": "negative",
     "language": "th"
   },
   "decision": "escalate_to_human",
   "route_team": "Engineering_Incident",
   "kb_articles_used": [
-    "KB-302",
-    "KB-301"
+    "KB-301",
+    "KB-302"
   ],
-  "customer_reply_draft": "ขอบคุณที่แจ้งครับ ตอนนี้เราพบว่ามีปัญหาใน region Asia จริงจากการตรวจสอบภายใน โดย Web App และ API มีอาการ degraded และมี HTTP 500 error rate สูงอยู่ แม้หน้า status.company.com จะยังแสดงว่า all systems operational ก็ตาม\n\nอาการที่คุณแจ้งสอดคล้องกับปัญหาระบบฝั่งเรา เพราะลองหลายเบราว์เซอร์ หลายเครื่อง และมีหลายคนในทีมเข้าไม่ได้เหมือนกันครับ\n\nผมได้ส่งเรื่องให้ทีมที่เกี่ยวข้องตรวจสอบแล้ว และกำลังเฝ้าดูสถานการณ์อยู่ สำหรับ demo บ่ายวันนี้ เราเข้าใจว่ามีผลกระทบเร่งด่วนมาก หากมีข้อมูลเพิ่มจากฝั่งคุณ เช่น เวลาเริ่มมีปัญหา หรือข้อความ error ที่เห็นชัดเจน ส่งมาได้เลยครับ",
-  "internal_note": "Enterprise customer in Thailand, 45 seats, first critical issue. All users in team cannot access the product, HTTP 500 on multiple browsers/devices. Customer has a demo with a large prospect this afternoon and says the deal may be lost if service is not restored. Customer also noted public status page says all systems operational, but internal monitoring shows Asia Web App and API degraded with HTTP 500 error rate 42% from ap-southeast load balancer since about 2 hours ago. Escalate to Engineering_Incident immediately; note discrepancy between public status and internal monitoring.",
+  "customer_reply_draft": "ขอบคุณที่แจ้งเข้ามาครับ ตอนนี้เรารับเรื่องนี้แล้วและได้ส่งต่อให้ทีมที่เกี่ยวข้องตรวจสอบทันที\n\nจากอาการที่แจ้งมา, error 500 เกิดกับหลายเบราว์เซอร์ และเพื่อนร่วมงานก็เข้าไม่ได้ด้วย รวมถึงข้อมูล monitoring ภายในของเราพบว่า region Asia มีปัญหาที่ Web App และ API อยู่ แม้หน้า status.company.com จะยังแสดงว่า all systems operational ก็ตาม\n\nทีมกำลังตรวจสอบเหตุขัดข้องใน region Asia อยู่ครับ ผมเข้าใจว่าคุณมี demo กับลูกค้ารายใหญ่บ่ายนี้ และกระทบต่อดีลสำคัญมาก เราจะเร่งให้ทีมดูเคสนี้เป็นลำดับสูงสุด\n\nถ้ามีข้อมูลเพิ่มเติม เช่น เวลาเริ่มเกิดปัญหาโดยประมาณ หรือข้อความ error เพิ่มเติม ส่งมาได้เลยครับ ผมจะแนบให้ทีมทันที",
+  "internal_note": "Enterprise customer in Thailand, first critical issue. Thread reports HTTP 500 for multiple browsers and multiple teammates, no workaround. Customer says there is a big client demo this afternoon and the deal may be lost if service is not restored. Public status page still says all systems operational, but internal monitoring shows Asia Web App degraded with HTTP 500 error rate at 42% from ap-southeast load balancer since about 2 hours ago; API also degraded, Billing operational. Possible discrepancy between public status and internal monitoring, so mention in handoff.",
   "confidence": 0.98,
   "guardrails_applied": []
 }
@@ -221,7 +222,7 @@ Real results for the three sample tickets from the latest `npm run eval` run wit
   "urgency": "low",
   "extracted": {
     "product": "Appearance settings",
-    "issue_type": "how_to_feature_request",
+    "issue_type": "how_to_feature_request_bug",
     "sentiment": "neutral",
     "language": "en"
   },
@@ -231,12 +232,10 @@ Real results for the three sample tickets from the latest `npm run eval` run wit
     "KB-101",
     "KB-102"
   ],
-  "customer_reply_draft": "Hey Taylor, yes, we do support dark mode via Settings > Appearance.\n\nOn Pro, the available options are Light and System Default. There isn’t a separate Dark toggle yet, so what you’re seeing is expected.\n\nIf System Default is set but the app still stays light on your Mac, try this:\n1. Fully quit and reopen the app after changing your Mac theme.\n2. Make sure the app is updated to the latest version.\n3. If you’re using the browser version, check whether an extension is forcing a light theme.\n\nFor scheduling, we don’t have an in-app dark mode schedule yet. The workaround is to keep the app on System Default and let macOS switch automatically. On Mac, you can use System Settings > Appearance > Auto so it changes between light and dark by time of day.\n\nHelp article: https://help.company.com/articles/appearance-settings\nSchedule info: https://help.company.com/articles/schedule-theme\n\nIf you want, you can also share the feature request with us through support, and I’ll pass it along.",
-  "internal_note": "Customer on Pro, 5 months active, US region, daily logins, no prior tickets. Asked about dark mode, then reported that System Default did not switch to dark on macOS and asked whether this is a bug. KB says only Light and System Default are available, no separate Dark toggle, and System Default should follow OS theme after quitting/reopening and updating. Also asked for scheduled dark mode, which is not available; workaround is macOS Auto theme switching. This is a low-urgency how-to plus feature request. Possible bug only if System Default still stays light after following the documented steps, but thread does not show those troubleshooting steps were tried yet.\n[Policy] team_assigned: route_team null -> Product",
-  "confidence": 0.89,
-  "guardrails_applied": [
-    "team_assigned: route_team null -> Product"
-  ]
+  "customer_reply_draft": "Yes, we do support theme switching, but on your plan the options are Light and System Default, not a separate Dark toggle. System Default should follow your Mac’s appearance setting.\n\nIf you set the app to System Default and your Mac is in dark mode, but the app still stays light, please try these steps:\n1. Fully quit and reopen the app after changing the Mac theme.\n2. Make sure you’re on the latest app version.\n3. If you’re using the browser version, check whether an extension is forcing a light theme.\n\nFor scheduling dark mode: the app doesn’t have its own schedule yet. The workaround on macOS is to set System Settings > Appearance > Auto, which switches light and dark automatically based on the time of day.\n\nHelp article:\nhttps://help.company.com/articles/appearance-settings\n\nScheduling info:\nhttps://help.company.com/articles/schedule-theme",
+  "internal_note": "Customer is on Pro, macOS desktop app, daily active, no prior tickets. They asked about dark mode, then reported that Settings > Appearance only shows Light and System Default, and that System Default stayed light even though macOS is set to dark. Possible bug: documentation says System Default should follow OS theme, but customer says it does not. Also requested a feature to schedule dark mode at 6pm, which the KB says is not available yet and can be shared as a feature request. Route to Product if not fully resolved by auto-response.",
+  "confidence": 0.88,
+  "guardrails_applied": []
 }
 ```
 

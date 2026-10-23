@@ -22,7 +22,7 @@
 
 ## 3. How to evaluate in production
 
-- **Golden set regression** (`npm run eval`): urgency, decision, team, language, KB use, key facts and safety checks, reported separately for `dev` cases (seen while writing the prompt) and `held_out` cases. Latest run 61/61; borderline cases can vary between runs, so track pass rates over repeated runs.
+- **Golden set regression** (`npm run eval`): urgency, decision, team, language, KB use, key facts and safety checks, reported separately for `dev` cases (seen while writing the prompt) and `held_out` cases. Model output varies, so `--runs N` repeats each case and reports unstable checks. Latest `--runs 3`: 182/183 (held-out 108/108); the one miss was T3's note not saying "possible bug" in 1 of 3 runs.
 - **Human override rate:** how often agents change the urgency, team or decision, or rewrite the draft.
 - **Escalation precision and recall**, time to first response and CSAT versus manual handling.
 - **Sampled review** of auto-responses, weighted toward low confidence.
