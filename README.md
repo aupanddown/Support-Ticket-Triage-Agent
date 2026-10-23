@@ -44,6 +44,14 @@ npm run triage -- --all --verbose        # also print each tool call
 
 Results are printed to stdout as JSON; progress and tool calls go to stderr, so `npm run -s triage -- --all > results.json` gives clean JSON.
 
+### Interactive mode (manual testing)
+
+```bash
+npm run chat
+```
+
+Pick a sample ticket (T1, T2 or T3), then press Enter to reveal the customer's messages one by one. After each message the agent triages the thread so far, so you can watch urgency and decision change as the thread develops. Type `/all` to triage the whole thread at once, or type your own message as the customer (for example a prompt injection) to see how the agent and the guardrails react. `/thread`, `/json`, `/new` and `/quit` are also available.
+
 ### HTTP API
 
 ```bash
@@ -94,6 +102,7 @@ src/
   tickets.ts             load and validate ticket files
   evaluation.ts          golden set checks and scoring
   cli.ts                 command line entry point
+  chat.ts                interactive terminal mode for manual testing
   server.ts              Fastify API
 scripts/eval.ts          evaluation against the golden set (real API)
 data/                    sample tickets, mock systems, KB articles, golden.json
