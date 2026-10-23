@@ -211,21 +211,26 @@ Real results for the three sample tickets from the first run of the latest `npm 
   "ticket_id": "T1",
   "urgency": "critical",
   "extracted": {
-    "product": "Billing / Pro upgrade",
-    "issue_type": "duplicate_charge, payment_failed, activation_failed",
+    "product": "billing",
+    "issue_types": [
+      "billing_dispute",
+      "billing_question",
+      "other"
+    ],
     "sentiment": "angry",
     "language": "en"
   },
   "decision": "escalate_to_human",
   "route_team": "Billing",
+  "follow_up_teams": [],
   "kb_articles_used": [
     "KB-201",
     "KB-202",
     "KB-203"
   ],
-  "customer_reply_draft": "I’m sorry for the trouble, especially with your presentation in 2 hours. I can see that your Pro upgrade attempts captured 3 charges of $29.99, but your account is still on Free because plan activation did not complete.\n\nThe right Billing team has your case and is reviewing the charges now. They will also check why Pro did not activate.\n\nA couple of notes from our help center:\n1. Pending or failed payment attempts can sometimes drop off within 3 to 5 business days, depending on your bank.\n2. Since you now have more than one captured charge, Billing needs to review each transaction before anything else happens.\n3. Please do not open a bank dispute yet, because that can lock the account while the issue is being investigated.\n\nPro includes advanced export features once the plan is active: https://help.company.com/articles/pro-plan-features\n\nWe’ll update you as soon as Billing has reviewed it.",
-  "internal_note": "Free-plan customer in US, 4 months tenure, first support contact. Upgrade to Pro attempted 3 times today. Billing transaction data shows activation_failed and 3 captured charges: TX-9001 $29.99 card 4242, TX-9002 $29.99 card 5511, TX-9003 $29.99 card 5511. Account still Free. Customer is very upset, demanded fix now, has a presentation in 2 hours, and threatened to dispute all charges by end of day. Escalate to Billing immediately due to money involved, duplicate/captured charges, activation failure, and chargeback threat. Also note they repeated attempts with different cards despite KB warning, but this does not reduce urgency.",
-  "confidence": 0.97,
+  "customer_reply_draft": "I’m sorry for the trouble, especially with your presentation in 2 hours. I’ve escalated this to our Billing team right away. They will review the three Pro charges on your account and the failed plan activation, and they’ll contact you directly as soon as possible.\n\nFrom what I can see, your account is still on Free, and the Pro upgrade did not activate even though the charges were captured. The Pro plan should unlock advanced export features as soon as it becomes active. I’ve also noted your message that you may dispute the charges with your bank if this isn’t resolved by end of day.\n\nIf you do contact your bank, please let us know so Billing can review everything together.",
+  "internal_note": "Customer attempted Pro upgrade 3 times today. Billing data shows current plan still Free and pending upgrade status is activation_failed. Three captured charges exist: TX-9001 ($29.99, 3 hours ago, card 4242), TX-9002 ($29.99, 2 hours ago, card 5511), TX-9003 ($29.99, 1 hour ago, card 5511). User reports no Pro access, wants export features for a presentation in 2 hours, and threatened to dispute all charges by end of day if not reversed. This is a billing dispute with chargeback threat and immediate deadline; escalate to Billing. Public status and internal US status are operational, so this is not an outage.",
+  "confidence": 0.98,
   "guardrails_applied": []
 }
 ```
@@ -237,19 +242,23 @@ Real results for the three sample tickets from the first run of the latest `npm 
   "ticket_id": "T2",
   "urgency": "critical",
   "extracted": {
-    "product": "Web App",
-    "issue_type": "outage",
+    "product": "platform",
+    "issue_types": [
+      "outage",
+      "access_problem"
+    ],
     "sentiment": "negative",
     "language": "th"
   },
   "decision": "escalate_to_human",
   "route_team": "Engineering_Incident",
+  "follow_up_teams": [],
   "kb_articles_used": [
     "KB-301",
     "KB-302"
   ],
-  "customer_reply_draft": "ขอบคุณที่แจ้งเข้ามาครับ ตอนนี้เรารับเรื่องนี้แล้วและได้ส่งต่อให้ทีมที่เกี่ยวข้องตรวจสอบทันที\n\nจากอาการที่แจ้งมา, error 500 เกิดกับหลายเบราว์เซอร์ และเพื่อนร่วมงานก็เข้าไม่ได้ด้วย รวมถึงข้อมูล monitoring ภายในของเราพบว่า region Asia มีปัญหาที่ Web App และ API อยู่ แม้หน้า status.company.com จะยังแสดงว่า all systems operational ก็ตาม\n\nทีมกำลังตรวจสอบเหตุขัดข้องใน region Asia อยู่ครับ ผมเข้าใจว่าคุณมี demo กับลูกค้ารายใหญ่บ่ายนี้ และกระทบต่อดีลสำคัญมาก เราจะเร่งให้ทีมดูเคสนี้เป็นลำดับสูงสุด\n\nถ้ามีข้อมูลเพิ่มเติม เช่น เวลาเริ่มเกิดปัญหาโดยประมาณ หรือข้อความ error เพิ่มเติม ส่งมาได้เลยครับ ผมจะแนบให้ทีมทันที",
-  "internal_note": "Enterprise customer in Thailand, first critical issue. Thread reports HTTP 500 for multiple browsers and multiple teammates, no workaround. Customer says there is a big client demo this afternoon and the deal may be lost if service is not restored. Public status page still says all systems operational, but internal monitoring shows Asia Web App degraded with HTTP 500 error rate at 42% from ap-southeast load balancer since about 2 hours ago; API also degraded, Billing operational. Possible discrepancy between public status and internal monitoring, so mention in handoff.",
+  "customer_reply_draft": "ขอบคุณที่แจ้งมาครับ ตอนนี้มีโอกาสเป็นปัญหาฝั่งระบบใน region Asia ตามอาการที่คุณแจ้งมา ทั้งขึ้น error 500 หลายเบราว์เซอร์และหลายเครื่อง รวมถึงเพื่อนร่วมงานเข้าไม่ได้ด้วย และคุณยังแจ้งว่ามี demo กับลูกค้ารายใหญ่ช่วงบ่ายนี้ด้วย ผมได้ส่งเรื่องให้ทีม Engineering_Incident แล้ว และทีมจะติดต่อกลับโดยเร็วที่สุด\n\nเรื่องที่ status.company.com ยังขึ้นว่า all systems operational นั้นอาจเกิดจากปัญหา regional incident ที่ยังไม่ถูกประกาศบนหน้าสถานะสาธารณะครับ",
+  "internal_note": "Enterprise customer in Thailand (Asia region), 45 seats, first critical issue, with 1 hour response SLA for critical issues. Thread shows HTTP 500 access failure for multiple users across browsers/devices, starting ~2 hours ago, worsening impact, and a deadline: demo with a major customer this afternoon, risk of losing deal. Public status page says all systems operational, but internal monitoring shows Asia Web App/API degraded with elevated 5xx from ap-southeast load balancer since about 2 hours ago. Owns Engineering_Incident; no billing issue.",
   "confidence": 0.98,
   "guardrails_applied": []
 }
@@ -262,20 +271,27 @@ Real results for the three sample tickets from the first run of the latest `npm 
   "ticket_id": "T3",
   "urgency": "low",
   "extracted": {
-    "product": "Appearance settings",
-    "issue_type": "how_to_feature_request_bug",
+    "product": "appearance",
+    "issue_types": [
+      "how_to",
+      "bug",
+      "feature_request"
+    ],
     "sentiment": "neutral",
     "language": "en"
   },
   "decision": "auto_respond",
-  "route_team": "Product",
+  "route_team": null,
+  "follow_up_teams": [
+    "Product"
+  ],
   "kb_articles_used": [
     "KB-101",
     "KB-102"
   ],
-  "customer_reply_draft": "Yes, we do support theme switching, but on your plan the options are Light and System Default, not a separate Dark toggle. System Default should follow your Mac’s appearance setting.\n\nIf you set the app to System Default and your Mac is in dark mode, but the app still stays light, please try these steps:\n1. Fully quit and reopen the app after changing the Mac theme.\n2. Make sure you’re on the latest app version.\n3. If you’re using the browser version, check whether an extension is forcing a light theme.\n\nFor scheduling dark mode: the app doesn’t have its own schedule yet. The workaround on macOS is to set System Settings > Appearance > Auto, which switches light and dark automatically based on the time of day.\n\nHelp article:\nhttps://help.company.com/articles/appearance-settings\n\nScheduling info:\nhttps://help.company.com/articles/schedule-theme",
-  "internal_note": "Customer is on Pro, macOS desktop app, daily active, no prior tickets. They asked about dark mode, then reported that Settings > Appearance only shows Light and System Default, and that System Default stayed light even though macOS is set to dark. Possible bug: documentation says System Default should follow OS theme, but customer says it does not. Also requested a feature to schedule dark mode at 6pm, which the KB says is not available yet and can be shared as a feature request. Route to Product if not fully resolved by auto-response.",
-  "confidence": 0.88,
+  "customer_reply_draft": "Yes, we do support appearance settings on all plans, including Pro. In Settings > Appearance, the available options are Light and System Default. There is not a separate Dark toggle yet, so what you are seeing is expected.\n\nIf you choose System Default, the app should follow your operating system theme. On macOS, that means it should switch to dark when your Mac is set to dark mode. If it is still showing light, please try:\n1. Fully quit and reopen the app after changing your Mac theme.\n2. Make sure you are on the latest app version.\n3. If you are using the browser version, check whether an extension is forcing a light theme.\n\nWe do not have a built-in schedule for dark mode yet. As a workaround, you can set your Mac to switch automatically in System Settings > Appearance > Auto, and then keep the app on System Default.\n\nThanks for the suggestion about scheduling dark mode. I have passed that feature request to our Product team as well.\n\nHelp article: https://help.company.com/articles/appearance-settings\nSchedule/theme article: https://help.company.com/articles/schedule-theme",
+  "internal_note": "Customer on Pro plan, 5 months tenure, US region, daily active, no prior tickets. Asked about dark mode, then reported that System Default on macOS still shows light theme and asked if it is a bug, plus requested scheduled dark mode at 6pm. KB says only Light and System Default are available on all plans; no separate Dark toggle. If System Default does not switch, recommended steps are fully quit/reopen after OS theme change, update app, and browser extension check. Also no built-in theme schedule yet; workaround is OS-level auto switch on macOS. Treat as a how-to plus possible bug report and feature request. No money/account issues.",
+  "confidence": 0.94,
   "guardrails_applied": []
 }
 ```

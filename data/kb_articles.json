@@ -60,7 +60,7 @@
       "dispute",
       "billing"
     ],
-    "body": "Pending authorizations from failed payments usually drop off within 3 to 5 business days, depending on your bank. If you see more than one captured charge for the same plan, contact support and our Billing team will review every transaction on your account. Please reach out to us before opening a dispute with your bank, as disputes can lock the account while they are investigated."
+    "body": "Pending authorizations from failed payments usually drop off within 3 to 5 business days, depending on your bank. If you see more than one captured charge for the same plan, contact support and our Billing team will review every transaction on your account. If you also contact your bank about a charge, let us know as well, so our Billing team can review it at the same time."
   },
   {
     "id": "KB-203",
