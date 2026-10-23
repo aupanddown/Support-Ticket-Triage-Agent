@@ -1,0 +1,41 @@
+{
+  "public_status_page": {
+    "url": "https://status.company.com",
+    "message": "All systems operational",
+    "last_updated": "3 hours ago"
+  },
+  "regions": [
+    {
+      "region": "us",
+      "components": [
+        { "name": "Web App", "status": "operational" },
+        { "name": "API", "status": "operational" },
+        { "name": "Billing", "status": "operational" }
+      ]
+    },
+    {
+      "region": "eu",
+      "components": [
+        { "name": "Web App", "status": "operational" },
+        { "name": "API", "status": "operational" },
+        { "name": "Billing", "status": "operational" }
+      ]
+    },
+    {
+      "region": "asia",
+      "components": [
+        {
+          "name": "Web App",
+          "status": "degraded",
+          "detail": "Internal monitoring: HTTP 500 error rate at 42% from the ap-southeast load balancer since about 2 hours ago. No incident has been posted to the public status page yet."
+        },
+        {
+          "name": "API",
+          "status": "degraded",
+          "detail": "Same upstream as Web App; elevated 5xx errors."
+        },
+        { "name": "Billing", "status": "operational" }
+      ]
+    }
+  ]
+}

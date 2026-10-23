@@ -1,0 +1,72 @@
+[
+  {
+    "customer_id": "C-1001",
+    "current_plan": "Free",
+    "pending_upgrade": {
+      "target_plan": "Pro",
+      "status": "activation_failed",
+      "detail": "Payment captured but plan activation did not complete."
+    },
+    "transactions": [
+      {
+        "id": "TX-9001",
+        "created": "3 hours ago",
+        "description": "Pro plan upgrade (monthly)",
+        "amount": 29.99,
+        "currency": "USD",
+        "card_last4": "4242",
+        "status": "captured"
+      },
+      {
+        "id": "TX-9002",
+        "created": "2 hours ago",
+        "description": "Pro plan upgrade (monthly)",
+        "amount": 29.99,
+        "currency": "USD",
+        "card_last4": "5511",
+        "status": "captured"
+      },
+      {
+        "id": "TX-9003",
+        "created": "1 hour ago",
+        "description": "Pro plan upgrade (monthly)",
+        "amount": 29.99,
+        "currency": "USD",
+        "card_last4": "5511",
+        "status": "captured"
+      }
+    ]
+  },
+  {
+    "customer_id": "C-2001",
+    "current_plan": "Enterprise",
+    "pending_upgrade": null,
+    "transactions": [
+      {
+        "id": "INV-2207",
+        "created": "1 month ago",
+        "description": "Enterprise annual invoice (45 seats)",
+        "amount": 16200,
+        "currency": "USD",
+        "card_last4": null,
+        "status": "paid"
+      }
+    ]
+  },
+  {
+    "customer_id": "C-3001",
+    "current_plan": "Pro",
+    "pending_upgrade": null,
+    "transactions": [
+      {
+        "id": "TX-8120",
+        "created": "12 days ago",
+        "description": "Pro plan (monthly)",
+        "amount": 29.99,
+        "currency": "USD",
+        "card_last4": "1881",
+        "status": "captured"
+      }
+    ]
+  }
+]

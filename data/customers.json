@@ -1,0 +1,44 @@
+[
+  {
+    "customer_id": "C-1001",
+    "name": "Jordan Lee",
+    "plan": "Free",
+    "region": "us",
+    "seats": 1,
+    "tenure_months": 4,
+    "activity": "weekly logins",
+    "past_tickets": [],
+    "notes": "Upgrade to Pro attempted 3 times today; plan is still Free."
+  },
+  {
+    "customer_id": "C-2001",
+    "name": "Siam Logistics Co., Ltd.",
+    "plan": "Enterprise",
+    "region": "asia",
+    "country": "Thailand",
+    "seats": 45,
+    "tenure_months": 8,
+    "activity": "daily logins across all seats",
+    "past_tickets": [
+      {
+        "id": "S-311",
+        "opened": "5 months ago",
+        "subject": "SSO setup question",
+        "severity": "low",
+        "status": "resolved"
+      }
+    ],
+    "notes": "Enterprise SLA: 1 hour response for critical issues. First critical issue on this account."
+  },
+  {
+    "customer_id": "C-3001",
+    "name": "Taylor Kim",
+    "plan": "Pro",
+    "region": "us",
+    "seats": 1,
+    "tenure_months": 5,
+    "activity": "daily logins",
+    "past_tickets": [],
+    "notes": "Uses the macOS desktop app."
+  }
+]
