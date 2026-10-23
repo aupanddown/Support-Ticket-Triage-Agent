@@ -16,9 +16,13 @@ export type RouteTeam = z.infer<typeof RouteTeam>;
 
 // ---------- Input: an incoming ticket ----------
 
+// Limits keep one request (e.g. through the API) from becoming very large, which costs tokens and time.
+const MAX_MESSAGE_LENGTH = 10_000;
+const MAX_MESSAGES = 50;
+
 export const TicketMessage = z.object({
-  sent: z.string().min(1).describe('Relative time the message was sent, e.g. "3 hours ago" or "just now"'),
-  text: z.string().min(1),
+  sent: z.string().min(1).max(100).describe('Relative time the message was sent, e.g. "3 hours ago" or "just now"'),
+  text: z.string().min(1).max(MAX_MESSAGE_LENGTH),
 });
 export type TicketMessage = z.infer<typeof TicketMessage>;
 
@@ -29,7 +33,7 @@ export const Ticket = z.object({
     info: z.string().min(1).describe("Free-text customer context as shown to the support agent"),
   }),
   // Oldest first. The whole thread matters: frustration and deadlines build up over time.
-  messages: z.array(TicketMessage).min(1),
+  messages: z.array(TicketMessage).min(1).max(MAX_MESSAGES),
 });
 export type Ticket = z.infer<typeof Ticket>;
 

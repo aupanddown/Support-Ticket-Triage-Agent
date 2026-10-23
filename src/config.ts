@@ -7,14 +7,16 @@ dotenv.config({ quiet: true });
 export const DEFAULT_MODEL = "gpt-5.4-mini";
 
 const EnvSchema = z.object({
-  // Optional at load time so tests and the API server can start without a key.
-  // The OpenAI client checks for it when it is actually created.
+  // Optional at load time so tests run without a key.
+  // The OpenAI client checks for it when it is actually created (CLI and server fail fast).
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default(DEFAULT_MODEL),
   OPENAI_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   // The OpenAI SDK retries 408/409/429/5xx and connection errors with exponential backoff.
   OPENAI_MAX_RETRIES: z.coerce.number().int().min(0).default(2),
   PORT: z.coerce.number().int().positive().default(3000),
+  // 127.0.0.1 keeps the server local; use 0.0.0.0 to reach it from a phone or emulator on the network.
+  HOST: z.string().default("127.0.0.1"),
 });
 
 export interface AppConfig {
@@ -25,6 +27,7 @@ export interface AppConfig {
     maxRetries: number;
   };
   port: number;
+  host: string;
 }
 
 /**
@@ -49,5 +52,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       maxRetries: vars.OPENAI_MAX_RETRIES,
     },
     port: vars.PORT,
+    host: vars.HOST,
   };
 }
