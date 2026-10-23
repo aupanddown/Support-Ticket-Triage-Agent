@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { detectLanguage } from "../src/language.js";
-import { applyPolicy, atLeast, mentionsMoney, promisesRefund, type PolicyContext } from "../src/policy.js";
+import { detectScript } from "../src/language.js";
+import { applyPolicy, atLeast, mentionsMoneyRisk, promisesRefund, type PolicyContext } from "../src/policy.js";
 import { Decision, Urgency, type Ticket, type TriageResult } from "../src/schemas.js";
 import { makeResult, makeTicket, sampleTicket } from "./fixtures.js";
 
 const ALL_KB_IDS = ["KB-101", "KB-102", "KB-201", "KB-202", "KB-203", "KB-301", "KB-302", "KB-401"];
 
-function run(result: TriageResult, ticket: Ticket = makeTicket(["How do I change the theme?"])): TriageResult {
-  const ctx: PolicyContext = { ticket, retrievedKbIds: ALL_KB_IDS };
-  return applyPolicy(result, ctx);
+function run(
+  result: TriageResult,
+  ticket: Ticket = makeTicket(["How do I change the theme?"]),
+  extra: Partial<PolicyContext> = {},
+): TriageResult {
+  return applyPolicy(result, { ticket, retrievedKbIds: ALL_KB_IDS, ...extra });
 }
 
 function ruleIds(result: TriageResult): string[] {
@@ -35,6 +38,11 @@ describe("applyPolicy", () => {
     );
   });
 
+  it("adds every change to the internal note, so the note matches the final routing", () => {
+    const result = run(makeResult({ internal_note: "Route to Support." }), sampleTicket("T1"));
+    expect(result.internal_note).toMatch(/^Route to Support\.\n\[Policy\] R1_money_to_billing: .*route_team null -> Billing/);
+  });
+
   it("can only make the outcome safer (never lowers urgency, never creates an auto_respond)", () => {
     const rank = { low: 0, medium: 1, high: 2, critical: 3 };
     for (const urgency of Urgency.options) {
@@ -59,23 +67,45 @@ describe("verified_kb_articles", () => {
   });
 });
 
-describe("R1: money goes to a human in Billing", () => {
+describe("R1: money matters go to a human in Billing", () => {
   it("escalates T1 to Billing with at least high urgency", () => {
     const result = run(makeResult({ urgency: "medium", decision: "auto_respond" }), sampleTicket("T1"));
     expect(result).toMatchObject({ decision: "escalate_to_human", route_team: "Billing", urgency: "high" });
   });
 
   it("keeps critical urgency when the LLM already chose it", () => {
-    const result = run(makeResult({ urgency: "critical" }), sampleTicket("T1"));
-    expect(result.urgency).toBe("critical");
+    expect(run(makeResult({ urgency: "critical" }), sampleTicket("T1")).urgency).toBe("critical");
   });
 
-  it("detects money topics in English and Thai, but not in unrelated tickets", () => {
-    expect(mentionsMoney(sampleTicket("T1"))).toBe(true);
-    expect(mentionsMoney(makeTicket(["I want my money back"]))).toBe(true);
-    expect(mentionsMoney(makeTicket(["ขอคืนเงินด้วยครับ"]))).toBe(true);
-    expect(mentionsMoney(sampleTicket("T2"))).toBe(false);
-    expect(mentionsMoney(sampleTicket("T3"))).toBe(false);
+  it("also escalates when the model itself classifies a refund or duplicate charge", () => {
+    const result = run(makeResult({ extracted: { ...makeResult().extracted, issue_type: "duplicate_charge" } }));
+    expect(result.route_team).toBe("Billing");
+  });
+
+  it.each([
+    "I want my money back",
+    "My payment failed when I tried to upgrade",
+    "I was charged twice this month",
+    "I see two pending charges",
+    "I'm disputing this with my bank",
+    "ขอคืนเงินด้วยครับ",
+    "ถูกตัดเงินซ้ำสองรอบ",
+  ])("detects a money risk: %s", (text) => {
+    expect(mentionsMoneyRisk(makeTicket([text]))).toBe(true);
+  });
+
+  it.each([
+    "Where can I download my billing invoice?",
+    "Is the Pro plan still $29.99 per month?",
+    "ตั้งค่าเงินเดือนในรายงานยังไง",
+  ])("does not escalate a plain billing question: %s", (text) => {
+    expect(mentionsMoneyRisk(makeTicket([text]))).toBe(false);
+    expect(ruleIds(run(makeResult(), makeTicket([text])))).not.toContain("R1_money_to_billing");
+  });
+
+  it("does not see a money risk in T2 or T3", () => {
+    expect(mentionsMoneyRisk(sampleTicket("T2"))).toBe(false);
+    expect(mentionsMoneyRisk(sampleTicket("T3"))).toBe(false);
   });
 
   it.each([
@@ -107,37 +137,50 @@ describe("R1: money goes to a human in Billing", () => {
     );
     expect(promisesRefund(result.customer_reply_draft)).toBe(false);
     expect(result.customer_reply_draft).toMatch(/Billing team/);
-    expect(result.internal_note).toMatch(/\[Policy\].*refund/);
-    expect(ruleIds(result)).toContain("R1_no_refund_promise");
+    expect(result.internal_note).toMatch(/\[Policy\] R1_no_refund_promise/);
   });
 });
 
 describe("R2: Enterprise outage is a critical incident", () => {
+  const llmT2 = makeResult({
+    urgency: "high",
+    decision: "route_to_specialist",
+    route_team: "Support",
+    customer_reply_draft: "ขออภัยในความไม่สะดวกครับ ทีมงานกำลังตรวจสอบให้ครับ",
+    extracted: { product: "Web App", issue_type: "outage", sentiment: "negative", language: "th" },
+  });
+
   it("makes T2 critical and escalates it to Engineering_Incident", () => {
-    const llm = makeResult({
-      urgency: "high",
-      decision: "route_to_specialist",
-      route_team: "Support",
-      customer_reply_draft: "ขออภัยในความไม่สะดวกครับ ทีมงานกำลังตรวจสอบให้ครับ",
-      extracted: { product: "Web App", issue_type: "outage", sentiment: "negative", language: "th" },
-    });
-    const result = run(llm, sampleTicket("T2"));
+    const result = run(llmT2, sampleTicket("T2"));
     expect(result).toMatchObject({ urgency: "critical", decision: "escalate_to_human", route_team: "Engineering_Incident" });
     expect(ruleIds(result)).toEqual(["R2_enterprise_outage"]);
   });
+
+  it.each(["How do I share a project with my coworkers?", "The dropdown arrow is pointing down, is that normal?"])(
+    "does not fire for an Enterprise how-to question: %s",
+    (text) => {
+      const result = run(makeResult(), makeTicket([text], "Enterprise plan, 45 seats"));
+      expect(ruleIds(result)).not.toContain("R2_enterprise_outage");
+    },
+  );
 
   it("does not apply to a non-Enterprise customer", () => {
     const ticket = makeTicket(["I get error 500 and cannot access the app"], "Pro plan, 5 months customer");
     const result = run(makeResult({ urgency: "high", decision: "route_to_specialist", route_team: "Support" }), ticket);
     expect(ruleIds(result)).not.toContain("R2_enterprise_outage");
   });
+
+  it("trusts the plan from customer history over the free-text info", () => {
+    const ticket = makeTicket(["error 500, we cannot access anything"], "Long-time customer");
+    expect(run(makeResult(), ticket, { customerPlan: "Enterprise" }).urgency).toBe("critical");
+    expect(run(makeResult(), sampleTicket("T2"), { customerPlan: "Pro" }).route_team).not.toBe("Engineering_Incident");
+  });
 });
 
 describe("R3: low confidence is never auto-responded", () => {
   it("escalates an auto_respond with confidence below 0.7", () => {
     const result = run(makeResult({ confidence: 0.6 }));
-    expect(result.decision).toBe("escalate_to_human");
-    expect(result.route_team).toBe("Support");
+    expect(result).toMatchObject({ decision: "escalate_to_human", route_team: "Support" });
   });
 
   it("allows auto_respond at exactly 0.7", () => {
@@ -147,8 +190,7 @@ describe("R3: low confidence is never auto-responded", () => {
 
 describe("R4: auto_respond needs low/medium urgency and a KB article", () => {
   it("routes a high urgency auto_respond to a specialist", () => {
-    const result = run(makeResult({ urgency: "high" }));
-    expect(result).toMatchObject({ decision: "route_to_specialist", route_team: "Support" });
+    expect(run(makeResult({ urgency: "high" }))).toMatchObject({ decision: "route_to_specialist", route_team: "Support" });
   });
 
   it("routes an auto_respond without KB articles to a specialist", () => {
@@ -160,7 +202,7 @@ describe("R4: auto_respond needs low/medium urgency and a KB article", () => {
   });
 });
 
-describe("R5: reply language matches the ticket", () => {
+describe("R5: reply written in the ticket's script", () => {
   it("replaces an English reply to a Thai ticket and escalates", () => {
     const llm = makeResult({
       urgency: "critical",
@@ -170,22 +212,39 @@ describe("R5: reply language matches the ticket", () => {
       extracted: { product: "Web App", issue_type: "outage", sentiment: "negative", language: "en" },
     });
     const result = run(llm, sampleTicket("T2"));
-    expect(detectLanguage(result.customer_reply_draft)).toBe("th");
+    expect(detectScript(result.customer_reply_draft)).toBe("thai");
     expect(result.extracted.language).toBe("th");
     expect(ruleIds(result)).toContain("R5_reply_language");
   });
 
-  it("accepts a Thai reply that contains English terms", () => {
-    const reply = "ขออภัยครับ ทีม Engineering กำลังตรวจสอบ error 500 ใน region Asia อยู่ครับ";
-    expect(detectLanguage(reply)).toBe("th");
+  it("keeps the model's label for languages it cannot check (e.g. Japanese or Spanish)", () => {
+    const japanese = makeResult({
+      customer_reply_draft: "はい、設定から変更できます。",
+      extracted: { ...makeResult().extracted, language: "ja" },
+    });
+    expect(run(japanese, makeTicket(["ダークモードはありますか"]))).toEqual(japanese);
+
+    const spanish = makeResult({
+      customer_reply_draft: "Hola, puedes cambiarlo en Ajustes > Apariencia.",
+      extracted: { ...makeResult().extracted, language: "es" },
+    });
+    expect(run(spanish, makeTicket(["Hola, ¿tienen modo oscuro?"])).extracted.language).toBe("es");
+  });
+
+  it("escalates a reply in the wrong script even without a fallback reply for that language", () => {
+    const result = run(makeResult({ customer_reply_draft: "Yes, go to Settings." }), makeTicket(["ダークモードはありますか"]));
+    expect(result.decision).toBe("escalate_to_human");
+    expect(result.customer_reply_draft).toBe("Yes, go to Settings."); // kept as a draft for the human
   });
 });
 
 describe("helpers", () => {
-  it("detects English, Thai, and defaults to English for no letters", () => {
-    expect(detectLanguage("Hello there")).toBe("en");
-    expect(detectLanguage(sampleTicket("T2").messages.map((m) => m.text).join(" "))).toBe("th");
-    expect(detectLanguage("123 !!!")).toBe("en");
+  it("detects the main script of a text", () => {
+    expect(detectScript("Hello there")).toBe("latin");
+    expect(detectScript(sampleTicket("T2").messages.map((m) => m.text).join(" "))).toBe("thai");
+    expect(detectScript("ขออภัยครับ ทีม Engineering กำลังตรวจสอบ error 500 ใน region Asia อยู่ครับ")).toBe("thai");
+    expect(detectScript("ダークモードはありますか")).toBe("other");
+    expect(detectScript("123 !!!")).toBeUndefined();
   });
 
   it("atLeast never lowers urgency", () => {

@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { detectLanguage } from "./language.js";
 import type { ChatMessage, LlmClient } from "./llm/client.js";
-import { applyPolicy, safeReply } from "./policy.js";
+import { applyPolicy, type PolicyContext, safeReply, safeReplyLanguage } from "./policy.js";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompts/system.js";
 import { LlmTriageOutput, type Ticket, TriageResult } from "./schemas.js";
+import { customerHistoryTool } from "./tools/customerHistory.js";
 import { executeTool, getToolSpecs, TOOLS, type ToolCall, type ToolResult } from "./tools/index.js";
 import { knowledgeBaseTool } from "./tools/knowledgeBase.js";
 import type { Tool } from "./tools/tool.js";
@@ -34,7 +34,9 @@ export interface AgentOptions {
  */
 export async function triageTicket(ticket: Ticket, options: AgentOptions): Promise<TriageResult> {
   const { llm, tools = TOOLS, maxIterations = DEFAULT_MAX_ITERATIONS, onEvent } = options;
+  // Facts gathered from tool results, passed to the policy.
   const retrievedKbIds = new Set<string>();
+  let customerPlan: string | undefined;
 
   try {
     const messages: ChatMessage[] = [
@@ -47,13 +49,15 @@ export async function triageTicket(ticket: Ticket, options: AgentOptions): Promi
       const response = await llm.complete({
         messages,
         tools: toolSpecs,
+        // On the last allowed call, tools are switched off so the model must give its answer.
+        toolChoice: iteration === maxIterations ? "none" : "auto",
         output: { name: "triage_result", schema: LlmTriageOutput },
       });
 
       if (response.type === "final") {
         const output = parseLlmOutput(response.content);
         const result: TriageResult = { ticket_id: ticket.id, ...output, guardrails_applied: [] };
-        return finalize(result, ticket, [...retrievedKbIds]);
+        return finalize(result, { ticket, retrievedKbIds: [...retrievedKbIds], customerPlan });
       }
 
       messages.push({ role: "assistant", content: null, toolCalls: response.calls });
@@ -61,6 +65,7 @@ export async function triageTicket(ticket: Ticket, options: AgentOptions): Promi
         const result = await executeTool(call, tools);
         onEvent?.({ type: "tool_call", call, result });
         for (const id of kbIdsFrom(call, result)) retrievedKbIds.add(id);
+        customerPlan = planFrom(call, result) ?? customerPlan;
         messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(result) });
       }
     }
@@ -86,8 +91,8 @@ function parseLlmOutput(content: string): LlmTriageOutput {
 }
 
 /** Applies the guardrails, then validates the final shape once more. */
-function finalize(result: TriageResult, ticket: Ticket, retrievedKbIds: string[]): TriageResult {
-  return TriageResult.parse(applyPolicy(result, { ticket, retrievedKbIds }));
+function finalize(result: TriageResult, ctx: PolicyContext): TriageResult {
+  return TriageResult.parse(applyPolicy(result, ctx));
 }
 
 /** Remembers which KB articles were really retrieved, so the policy can reject invented IDs. */
@@ -96,12 +101,19 @@ function kbIdsFrom(call: ToolCall, result: ToolResult): string[] {
   return result.data.map((article: { id: string }) => article.id);
 }
 
+/** The customer's plan from the customer history tool, so the policy does not rely on free text. */
+function planFrom(call: ToolCall, result: ToolResult): string | undefined {
+  if (call.name !== customerHistoryTool.name || !result.ok) return undefined;
+  const plan = (result.data as { plan?: unknown }).plan;
+  return typeof plan === "string" ? plan : undefined;
+}
+
 /**
  * When automation fails, a human takes over. Urgency starts at "high" so the ticket is looked at soon;
  * the policy still runs, so e.g. a billing ticket goes to Billing and an Enterprise outage becomes critical.
  */
 export function failSafeResult(ticket: Ticket, reason: string): TriageResult {
-  const language = detectLanguage(ticket.messages.map((m) => m.text).join("\n"));
+  const language = safeReplyLanguage(ticket);
   const result: TriageResult = {
     ticket_id: ticket.id,
     urgency: "high",
@@ -114,5 +126,5 @@ export function failSafeResult(ticket: Ticket, reason: string): TriageResult {
     confidence: 0,
     guardrails_applied: [`fail_safe: ${reason}`],
   };
-  return finalize(result, ticket, []);
+  return finalize(result, { ticket, retrievedKbIds: [] });
 }

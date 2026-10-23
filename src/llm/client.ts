@@ -24,6 +24,8 @@ export type ChatMessage =
 export interface LlmRequest {
   messages: ChatMessage[];
   tools: ToolSpec[];
+  /** "none" forbids tool calls, forcing a final answer (used on the last allowed iteration). */
+  toolChoice: "auto" | "none";
   /** Schema the final answer must follow (structured output). */
   output: { name: string; schema: z.ZodType };
 }
@@ -54,6 +56,7 @@ export class OpenAiLlmClient implements LlmClient {
       model: this.model,
       messages: request.messages.map(toOpenAiMessage),
       tools: request.tools.map(toOpenAiTool),
+      tool_choice: request.toolChoice,
       // Used only when the model answers instead of calling a tool.
       response_format: zodResponseFormat(request.output.schema, request.output.name),
     });

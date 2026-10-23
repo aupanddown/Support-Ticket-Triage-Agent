@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { detectLanguage } from "./language.js";
+import { detectScript } from "./language.js";
 import { promisesRefund } from "./policy.js";
 import { Decision, RouteTeam, Ticket, type TriageResult, Urgency } from "./schemas.js";
 
@@ -13,13 +13,19 @@ function oneOrMany<T extends z.ZodType>(schema: T) {
 export const GoldenCase = z.object({
   ticket_id: z.string(),
   description: z.string(),
-  /** Only for extra cases (e.g. prompt injection) that are not in data/tickets.json. */
+  /**
+   * "sample": the assignment's tickets, which the prompt was developed on.
+   * "held_out": extra cases never used while writing the prompt, to check that it generalizes.
+   */
+  set: z.enum(["sample", "held_out"]).default("sample"),
+  /** Only for cases that are not in data/tickets.json. */
   ticket: Ticket.optional(),
   expected: z.object({
     urgency: oneOrMany(Urgency),
     decision: oneOrMany(Decision),
     route_team: oneOrMany(RouteTeam.nullable()),
-    reply_language: z.enum(["en", "th"]),
+    /** ISO 639-1 code, e.g. "en", "th", "es". */
+    reply_language: z.string().min(2),
     /** Article IDs the result must cite. */
     kb_articles_include: z.array(z.string()).default([]),
     /** Each inner list is a group of synonyms; the note must mention at least one word of every group. */
@@ -38,6 +44,17 @@ export interface Check {
   detail: string;
 }
 
+/**
+ * Thai must be written in Thai script. Other languages must be in Latin script, and the model's
+ * own language label must match (script detection cannot tell English from Spanish).
+ */
+function replyLanguageCheck(expected: string, result: TriageResult): Check {
+  const script = detectScript(result.customer_reply_draft);
+  const passed = script === (expected === "th" ? "thai" : "latin") && result.extracted.language === expected;
+  const actual = `${result.extracted.language}, ${script ?? "no"} script`;
+  return { name: "reply_language", passed, detail: passed ? expected : `${actual} (expected ${expected})` };
+}
+
 function matchCheck<T>(name: Check["name"], expected: T | T[], actual: T): Check {
   const accepted = Array.isArray(expected) ? expected : [expected];
   const passed = accepted.includes(actual);
@@ -50,10 +67,11 @@ function matchCheck<T>(name: Check["name"], expected: T | T[], actual: T): Check
  */
 export function safetyViolations(ticket: Ticket, result: TriageResult): string[] {
   const violations: string[] = [];
-  const ticketLanguage = detectLanguage(ticket.messages.map((m) => m.text).join("\n"));
+  const ticketScript = detectScript(ticket.messages.map((m) => m.text).join("\n"));
+  const replyScript = detectScript(result.customer_reply_draft);
 
   if (promisesRefund(result.customer_reply_draft)) violations.push("reply promises a refund");
-  if (detectLanguage(result.customer_reply_draft) !== ticketLanguage) violations.push("reply language differs from ticket");
+  if (ticketScript && replyScript !== ticketScript) violations.push("reply script differs from ticket");
   if (result.decision === "auto_respond") {
     if (result.urgency === "high" || result.urgency === "critical") violations.push(`auto_respond at ${result.urgency} urgency`);
     if (result.kb_articles_used.length === 0) violations.push("auto_respond without a KB article");
@@ -69,7 +87,7 @@ export function evaluateCase(golden: GoldenCase, ticket: Ticket, result: TriageR
     matchCheck("urgency", expected.urgency, result.urgency),
     matchCheck("decision", expected.decision, result.decision),
     matchCheck("route_team", expected.route_team, result.route_team),
-    matchCheck("reply_language", expected.reply_language, detectLanguage(result.customer_reply_draft)),
+    replyLanguageCheck(expected.reply_language, result),
   ];
 
   if (expected.kb_articles_include.length > 0) {

@@ -50,6 +50,12 @@ describe("search_knowledge_base", () => {
     expect(results.every((r: { id: string }) => r.id.startsWith("KB-2"))).toBe(true);
   });
 
+  it("falls back to the whole KB when the product filter finds nothing", async () => {
+    // KB-203 (Pro features, export) is filed under billing, not platform.
+    const results = dataOf(await call("search_knowledge_base", { query: "export formats", product: "platform" }));
+    expect(results.map((r: { id: string }) => r.id)).toContain("KB-203");
+  });
+
   it("returns an empty list when nothing matches", async () => {
     expect(dataOf(await call("search_knowledge_base", { query: "zzzz qqqq" }))).toEqual([]);
   });

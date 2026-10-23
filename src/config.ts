@@ -15,7 +15,7 @@ const EnvSchema = z.object({
   // The OpenAI SDK retries 408/409/429/5xx and connection errors with exponential backoff.
   OPENAI_MAX_RETRIES: z.coerce.number().int().min(0).default(2),
   PORT: z.coerce.number().int().positive().default(3000),
-  // 127.0.0.1 keeps the server local; use 0.0.0.0 to reach it from a phone or emulator on the network.
+  // 127.0.0.1 keeps the server local; use 0.0.0.0 to accept connections from other machines.
   HOST: z.string().default("127.0.0.1"),
 });
 

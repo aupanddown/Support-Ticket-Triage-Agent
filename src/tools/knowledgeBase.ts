@@ -52,23 +52,30 @@ export const knowledgeBaseTool = defineTool({
     "Use English keywords even if the ticket is in another language.",
   args: z.object({
     query: z.string().min(1).describe('English keywords, e.g. "dark mode system default"'),
-    product: KbProduct.optional().describe("Only search articles for this product area"),
+    product: KbProduct.optional().describe(
+      "Prefer articles for this product area. If none match, all articles are searched.",
+    ),
   }),
   async handler({ query, product }) {
-    const terms = tokenize(query);
-
-    return articles
-      .filter((article) => !product || article.product === product)
-      .map((article) => ({ article, score: scoreArticle(article, terms) }))
-      .filter(({ score }) => score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, MAX_RESULTS)
-      .map(({ article, score }) => ({
-        id: article.id,
-        title: article.title,
-        url: article.url,
-        snippet: toSnippet(article.body),
-        score,
-      }));
+    const inProduct = product ? search(query, articles.filter((a) => a.product === product)) : [];
+    // A wrong product guess should not hide a relevant article, so fall back to the whole KB.
+    return inProduct.length > 0 ? inProduct : search(query, articles);
   },
 });
+
+/** Best matches first; articles that match no query term are left out. */
+function search(query: string, candidates: readonly Article[]) {
+  const terms = tokenize(query);
+  return candidates
+    .map((article) => ({ article, score: scoreArticle(article, terms) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_RESULTS)
+    .map(({ article, score }) => ({
+      id: article.id,
+      title: article.title,
+      url: article.url,
+      snippet: toSnippet(article.body),
+      score,
+    }));
+}

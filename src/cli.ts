@@ -56,7 +56,7 @@ function logEvent(ticketId: string, event: AgentEvent): void {
     const outcome = event.result.ok ? "ok" : `error: ${event.result.error}`;
     console.error(`  [${ticketId}] ${event.call.name}(${event.call.arguments}) -> ${outcome}`);
   } else {
-    console.error(`  [${ticketId}] fail-safe: ${event.reason}`);
+    console.error(`  [${ticketId}] WARNING: automatic triage failed, escalated to a human. Reason: ${event.reason}`);
   }
 }
 
@@ -75,7 +75,10 @@ async function main(): Promise<void> {
   const results: TriageResult[] = [];
   for (const ticket of tickets) {
     console.error(`Triaging ${ticket.id} with ${config.openai.model}...`);
-    const onEvent = args.verbose ? (event: AgentEvent) => logEvent(ticket.id, event) : undefined;
+    // Tool calls only with --verbose; a fail-safe is always shown so a failing API key or model is obvious.
+    const onEvent = (event: AgentEvent) => {
+      if (args.verbose || event.type === "fail_safe") logEvent(ticket.id, event);
+    };
     results.push(await triageTicket(ticket, { llm, onEvent }));
   }
 

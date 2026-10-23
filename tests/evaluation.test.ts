@@ -80,7 +80,7 @@ describe("safetyViolations", () => {
     });
     expect(safetyViolations(sampleTicket("T2"), unsafe)).toEqual([
       "reply promises a refund",
-      "reply language differs from ticket",
+      "reply script differs from ticket",
       "auto_respond at critical urgency",
       "auto_respond without a KB article",
       "auto_respond with confidence below 0.7",

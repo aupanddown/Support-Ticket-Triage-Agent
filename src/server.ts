@@ -11,10 +11,7 @@ export interface ServerOptions {
   logger?: boolean;
 }
 
-/**
- * Builds the HTTP API. Takes the LLM client as a parameter so tests can use a fake one.
- * Plain JSON over HTTP, so any client (web, Flutter, other services) can call it.
- */
+/** Builds the HTTP API. Takes the LLM client as a parameter so tests can use a fake one. */
 export function buildServer({ llm, logger = false }: ServerOptions): FastifyInstance {
   const app = Fastify({ logger });
 
@@ -28,10 +25,14 @@ export function buildServer({ llm, logger = false }: ServerOptions): FastifyInst
 
     const ticket = parsed.data;
     // triageTicket never throws: failures come back as an escalate_to_human result.
-    return triageTicket(ticket, {
+    const result = await triageTicket(ticket, {
       llm,
       onEvent: (event) => request.log.info({ ticketId: ticket.id, ...event }, `agent ${event.type}`),
     });
+    if (result.guardrails_applied.length > 0) {
+      request.log.info({ ticketId: ticket.id, guardrails: result.guardrails_applied }, "policy guardrails applied");
+    }
+    return result;
   });
 
   return app;

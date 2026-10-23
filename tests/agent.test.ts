@@ -71,6 +71,41 @@ describe("agent loop", () => {
     expect(result.decision).toBe("route_to_specialist");
   });
 
+  it("switches tools off on the last allowed call so the model must answer", async () => {
+    const llm = new FakeLlmClient([
+      ...Array.from({ length: DEFAULT_MAX_ITERATIONS - 1 }, () =>
+        toolCalls({ name: "get_customer_history", args: { customer_id: "C-3001" } }),
+      ),
+      finalAnswer({ ...T3_OUTPUT, kb_articles_used: [], decision: "route_to_specialist" }),
+    ]);
+
+    const result = await triageTicket(sampleTicket("T3"), { llm });
+
+    expect(llm.requests.map((r) => r.toolChoice)).toEqual(["auto", "auto", "auto", "auto", "none"]);
+    expect(result.guardrails_applied.some((g) => g.startsWith("fail_safe"))).toBe(false);
+  });
+
+  it("gives the policy the plan from customer history, not only the free-text info", async () => {
+    // The ticket text does not say "Enterprise", but the customer history tool does.
+    const ticket = { ...sampleTicket("T2"), customer: { id: "C-2001", info: "Customer in Thailand" } };
+    const llm = new FakeLlmClient([
+      toolCalls({ name: "get_customer_history", args: { customer_id: "C-2001" } }),
+      finalAnswer({
+        ...T3_OUTPUT,
+        urgency: "high",
+        decision: "route_to_specialist",
+        route_team: "Support",
+        kb_articles_used: [],
+        customer_reply_draft: "ขออภัยครับ ทีมงานกำลังตรวจสอบให้ครับ",
+        extracted: { ...T3_OUTPUT.extracted, language: "th" },
+      }),
+    ]);
+
+    const result = await triageTicket(ticket, { llm });
+
+    expect(result).toMatchObject({ urgency: "critical", route_team: "Engineering_Incident" });
+  });
+
   it("feeds tool errors back to the model so it can recover", async () => {
     const llm = new FakeLlmClient([
       toolCalls({ name: "get_customer_history", args: { customer_id: "WRONG" } }),
