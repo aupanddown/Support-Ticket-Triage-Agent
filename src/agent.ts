@@ -1,11 +1,9 @@
 import { z } from "zod";
-import type { ChatMessage, LlmClient } from "./llm/client.js";
-import { applyPolicy, type PolicyContext, safeReply, safeReplyLanguage } from "./policy.js";
+import { type ChatMessage, type LlmClient, LlmConfigError } from "./llm/client.js";
+import { applyPolicy, type PolicyFacts, safeReply, safeReplyLanguage } from "./policy.js";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompts/system.js";
 import { LlmTriageOutput, type Ticket, TriageResult } from "./schemas.js";
-import { customerHistoryTool } from "./tools/customerHistory.js";
 import { executeTool, getToolSpecs, TOOLS, type ToolCall, type ToolResult } from "./tools/index.js";
-import { knowledgeBaseTool } from "./tools/knowledgeBase.js";
 import type { Tool } from "./tools/tool.js";
 
 export const DEFAULT_MAX_ITERATIONS = 5;
@@ -13,7 +11,8 @@ export const DEFAULT_MAX_ITERATIONS = 5;
 /** Emitted while the agent runs; used for logging and evaluation. */
 export type AgentEvent =
   | { type: "tool_call"; call: ToolCall; result: ToolResult }
-  | { type: "fail_safe"; reason: string };
+  /** `configError`: the API key or model was rejected, so every other ticket will fail the same way. */
+  | { type: "fail_safe"; reason: string; configError: boolean };
 
 export interface AgentOptions {
   llm: LlmClient;
@@ -26,17 +25,16 @@ export interface AgentOptions {
  * Triages one ticket.
  *
  * 1. Send the system prompt and the ticket to the LLM, with the tool definitions.
- * 2. While the LLM asks for tools: run them and send the results back (max `maxIterations` LLM calls).
- * 3. Validate the final answer with zod, then apply the deterministic policy.
+ * 2. While the LLM asks for tools: run them (scoped to this ticket's customer), collect their facts,
+ *    and send the results back (max `maxIterations` LLM calls).
+ * 3. Validate the final answer with zod, then apply the deterministic policy using the facts.
  *
  * Never throws: on any failure (API error, timeout, invalid output, too many iterations)
  * it returns a fail-safe result that escalates to a human and explains why.
  */
 export async function triageTicket(ticket: Ticket, options: AgentOptions): Promise<TriageResult> {
   const { llm, tools = TOOLS, maxIterations = DEFAULT_MAX_ITERATIONS, onEvent } = options;
-  // Facts gathered from tool results, passed to the policy.
-  const retrievedKbIds = new Set<string>();
-  let customerPlan: string | undefined;
+  let facts: PolicyFacts = {};
 
   try {
     const messages: ChatMessage[] = [
@@ -57,15 +55,15 @@ export async function triageTicket(ticket: Ticket, options: AgentOptions): Promi
       if (response.type === "final") {
         const output = parseLlmOutput(response.content);
         const result: TriageResult = { ticket_id: ticket.id, ...output, guardrails_applied: [] };
-        return finalize(result, { ticket, retrievedKbIds: [...retrievedKbIds], customerPlan });
+        return finalize(result, ticket, facts);
       }
 
       messages.push({ role: "assistant", content: null, toolCalls: response.calls });
       for (const call of response.calls) {
-        const result = await executeTool(call, tools);
+        const result = await executeTool(call, tools, { customerId: ticket.customer.id });
         onEvent?.({ type: "tool_call", call, result });
-        for (const id of kbIdsFrom(call, result)) retrievedKbIds.add(id);
-        customerPlan = planFrom(call, result) ?? customerPlan;
+        const tool = tools.find((t) => t.name === call.name);
+        if (result.ok && tool?.facts) facts = mergeFacts(facts, tool.facts(result.data));
         messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify(result) });
       }
     }
@@ -73,8 +71,8 @@ export async function triageTicket(ticket: Ticket, options: AgentOptions): Promi
     throw new Error(`No final answer after ${maxIterations} LLM calls (max iterations reached)`);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    onEvent?.({ type: "fail_safe", reason });
-    return failSafeResult(ticket, reason);
+    onEvent?.({ type: "fail_safe", reason, configError: error instanceof LlmConfigError });
+    return failSafeResult(ticket, reason, facts);
   }
 }
 
@@ -91,28 +89,27 @@ function parseLlmOutput(content: string): LlmTriageOutput {
 }
 
 /** Applies the guardrails, then validates the final shape once more. */
-function finalize(result: TriageResult, ctx: PolicyContext): TriageResult {
-  return TriageResult.parse(applyPolicy(result, ctx));
+function finalize(result: TriageResult, ticket: Ticket, facts: PolicyFacts): TriageResult {
+  return TriageResult.parse(applyPolicy(result, { ticket, facts }));
 }
 
-/** Remembers which KB articles were really retrieved, so the policy can reject invented IDs. */
-function kbIdsFrom(call: ToolCall, result: ToolResult): string[] {
-  if (call.name !== knowledgeBaseTool.name || !result.ok || !Array.isArray(result.data)) return [];
-  return result.data.map((article: { id: string }) => article.id);
-}
-
-/** The customer's plan from the customer history tool, so the policy does not rely on free text. */
-function planFrom(call: ToolCall, result: ToolResult): string | undefined {
-  if (call.name !== customerHistoryTool.name || !result.ok) return undefined;
-  const plan = (result.data as { plan?: unknown }).plan;
-  return typeof plan === "string" ? plan : undefined;
+/** Combines facts from several tool calls: lists are merged, other values are replaced by the latest. */
+function mergeFacts(current: PolicyFacts, next: PolicyFacts): PolicyFacts {
+  const union = (a?: string[], b?: string[]) => (a || b ? [...new Set([...(a ?? []), ...(b ?? [])])] : undefined);
+  return {
+    ...current,
+    ...next,
+    degradedRegions: union(current.degradedRegions, next.degradedRegions),
+    retrievedKbIds: union(current.retrievedKbIds, next.retrievedKbIds),
+  };
 }
 
 /**
  * When automation fails, a human takes over. Urgency starts at "high" so the ticket is looked at soon;
- * the policy still runs, so e.g. a billing ticket goes to Billing and an Enterprise outage becomes critical.
+ * the policy still runs with the facts gathered so far, so e.g. a billing ticket goes to Billing and
+ * an Enterprise outage becomes critical.
  */
-export function failSafeResult(ticket: Ticket, reason: string): TriageResult {
+export function failSafeResult(ticket: Ticket, reason: string, facts: PolicyFacts = {}): TriageResult {
   const language = safeReplyLanguage(ticket);
   const result: TriageResult = {
     ticket_id: ticket.id,
@@ -126,5 +123,5 @@ export function failSafeResult(ticket: Ticket, reason: string): TriageResult {
     confidence: 0,
     guardrails_applied: [`fail_safe: ${reason}`],
   };
-  return finalize(result, { ticket, retrievedKbIds: [] });
+  return finalize(result, ticket, facts);
 }

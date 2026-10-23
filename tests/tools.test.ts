@@ -3,7 +3,10 @@ import customers from "../data/customers.json" with { type: "json" };
 import tickets from "../data/tickets.json" with { type: "json" };
 import { Ticket } from "../src/schemas.js";
 import { executeTool, getToolSpecs, TOOLS, type ToolResult } from "../src/tools/index.js";
-import { scoreArticle, tokenize } from "../src/tools/knowledgeBase.js";
+import { billingTool } from "../src/tools/billing.js";
+import { customerHistoryTool } from "../src/tools/customerHistory.js";
+import { knowledgeBaseTool, scoreArticle, tokenize } from "../src/tools/knowledgeBase.js";
+import { serviceStatusTool } from "../src/tools/serviceStatus.js";
 
 /** Calls a tool the way the agent does (arguments as a JSON string). */
 function call(name: string, args: unknown): Promise<ToolResult> {
@@ -106,7 +109,42 @@ describe("check_service_status", () => {
   });
 });
 
+describe("tool facts (evidence for the policy)", () => {
+  const factsOf = async (tool: (typeof TOOLS)[number], args: unknown) => tool.facts!(dataOf(await call(tool.name, args)));
+
+  it("customer history gives the plan and region", async () => {
+    expect(await factsOf(customerHistoryTool, { customer_id: "C-2001" })).toEqual({
+      customerPlan: "Enterprise",
+      customerRegion: "asia",
+    });
+  });
+
+  it("billing flags T1's failed activation and repeated charges, but not a normal account", async () => {
+    expect(await factsOf(billingTool, { customer_id: "C-1001" })).toEqual({ billingProblem: true });
+    expect(await factsOf(billingTool, { customer_id: "C-3001" })).toEqual({ billingProblem: false });
+  });
+
+  it("service status lists the degraded regions", async () => {
+    expect(await factsOf(serviceStatusTool, {})).toEqual({ degradedRegions: ["asia"] });
+    expect(await factsOf(serviceStatusTool, { region: "us" })).toEqual({ degradedRegions: [] });
+  });
+
+  it("knowledge base lists the retrieved article IDs", async () => {
+    const facts = await factsOf(knowledgeBaseTool, { query: "dark mode system default" });
+    expect(facts.retrievedKbIds?.[0]).toBe("KB-101");
+  });
+});
+
 describe("tool registry", () => {
+  it("only lets tools look up the ticket's own customer", async () => {
+    const scope = { customerId: "C-1001" };
+    const other = await executeTool({ name: "get_billing_transactions", arguments: '{"customer_id":"C-2001"}' }, TOOLS, scope);
+    expect(other).toEqual({ ok: false, error: "Only the ticket's customer (C-1001) can be looked up" });
+
+    const own = await executeTool({ name: "get_billing_transactions", arguments: '{"customer_id":"C-1001"}' }, TOOLS, scope);
+    expect(own.ok).toBe(true);
+  });
+
   it("returns an error for an unknown tool", async () => {
     expect(await call("issue_refund", { amount: 29.99 })).toEqual({ ok: false, error: 'Unknown tool "issue_refund"' });
   });

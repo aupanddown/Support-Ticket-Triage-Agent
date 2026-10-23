@@ -75,11 +75,15 @@ async function main(): Promise<void> {
   const results: TriageResult[] = [];
   for (const ticket of tickets) {
     console.error(`Triaging ${ticket.id} with ${config.openai.model}...`);
+    let configError: string | undefined;
     // Tool calls only with --verbose; a fail-safe is always shown so a failing API key or model is obvious.
     const onEvent = (event: AgentEvent) => {
-      if (args.verbose || event.type === "fail_safe") logEvent(ticket.id, event);
+      if (event.type === "fail_safe" && event.configError) configError = event.reason;
+      else if (args.verbose || event.type === "fail_safe") logEvent(ticket.id, event);
     };
     results.push(await triageTicket(ticket, { llm, onEvent }));
+    // A rejected key or model would fail every ticket the same way: stop instead of printing fake escalations.
+    if (configError) throw new Error(configError);
   }
 
   console.log(JSON.stringify(results.length === 1 ? results[0] : results, null, 2));

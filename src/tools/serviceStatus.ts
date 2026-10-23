@@ -4,6 +4,8 @@ import { defineTool } from "./tool.js";
 
 export const Region = z.enum(["us", "eu", "asia"]);
 
+type RegionStatus = (typeof status.regions)[number];
+
 export const serviceStatusTool = defineTool({
   name: "check_service_status",
   description:
@@ -18,5 +20,10 @@ export const serviceStatusTool = defineTool({
       public_status_page: status.public_status_page,
       regions: status.regions.filter((r) => !region || r.region === region),
     };
+  },
+  facts: (data) => {
+    const { regions } = data as { regions: RegionStatus[] };
+    const degraded = regions.filter((r) => r.components.some((c) => c.status !== "operational"));
+    return { degradedRegions: degraded.map((r) => r.region) };
   },
 });

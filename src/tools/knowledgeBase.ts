@@ -61,6 +61,8 @@ export const knowledgeBaseTool = defineTool({
     // A wrong product guess should not hide a relevant article, so fall back to the whole KB.
     return inProduct.length > 0 ? inProduct : search(query, articles);
   },
+  // Remembers which articles were really retrieved, so the policy can drop invented IDs.
+  facts: (data) => ({ retrievedKbIds: (data as Array<{ id: string }>).map((a) => a.id) }),
 });
 
 /** Best matches first; articles that match no query term are left out. */

@@ -135,7 +135,16 @@ interface Session {
 async function triage(session: Session, llm: LlmClient, model: string): Promise<void> {
   printTicket(session.ticket);
   heading(`AGENT (${model})`);
-  session.lastResult = await triageTicket(session.ticket, { llm, onEvent: printEvent });
+  let configError: string | undefined;
+  session.lastResult = await triageTicket(session.ticket, {
+    llm,
+    onEvent: (event) => {
+      if (event.type === "fail_safe" && event.configError) configError = event.reason;
+      printEvent(event);
+    },
+  });
+  // A rejected key or model fails every ticket the same way, so stop with the reason.
+  if (configError) throw new Error(configError);
   printResult(session.lastResult);
   console.log(dim(HELP));
 }

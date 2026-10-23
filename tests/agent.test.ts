@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type AgentEvent, DEFAULT_MAX_ITERATIONS, triageTicket } from "../src/agent.js";
+import { LlmConfigError } from "../src/llm/client.js";
 import type { LlmTriageOutput } from "../src/schemas.js";
 import { FakeLlmClient, finalAnswer, toolCalls } from "./fakeLlmClient.js";
 import { sampleTicket } from "./fixtures.js";
@@ -106,6 +107,40 @@ describe("agent loop", () => {
     expect(result).toMatchObject({ urgency: "critical", route_team: "Engineering_Incident" });
   });
 
+  it("cannot be made less safe by looking up another customer", async () => {
+    // A fooled model looks up a Pro customer for the Enterprise outage ticket T2.
+    const llm = new FakeLlmClient([
+      toolCalls({ name: "get_customer_history", args: { customer_id: "C-3001" } }),
+      finalAnswer({
+        ...T3_OUTPUT,
+        decision: "route_to_specialist",
+        route_team: "Support",
+        kb_articles_used: [],
+        customer_reply_draft: "ขออภัยครับ กำลังตรวจสอบให้ครับ",
+        extracted: { ...T3_OUTPUT.extracted, issue_type: "login_issue", language: "th" },
+      }),
+    ]);
+
+    const result = await triageTicket(sampleTicket("T2"), { llm });
+
+    const toolReply = JSON.parse(llm.requests[1]!.messages.at(-1)!.content!);
+    expect(toolReply).toEqual({ ok: false, error: "Only the ticket's customer (C-2001) can be looked up" });
+    expect(result).toMatchObject({ urgency: "critical", route_team: "Engineering_Incident" });
+  });
+
+  it("uses facts from tool results as policy evidence", async () => {
+    // T1's billing data shows a failed activation, so the ticket goes to Billing even if the model says otherwise.
+    const llm = new FakeLlmClient([
+      toolCalls({ name: "get_billing_transactions", args: { customer_id: "C-1001" } }),
+      finalAnswer({ ...T3_OUTPUT, decision: "route_to_specialist", route_team: "Support", kb_articles_used: [] }),
+    ]);
+    const ticket = { ...sampleTicket("T1"), messages: [{ sent: "now", text: "Why is my account still on Free?" }] };
+
+    const result = await triageTicket(ticket, { llm });
+
+    expect(result).toMatchObject({ decision: "escalate_to_human", route_team: "Billing" });
+  });
+
   it("feeds tool errors back to the model so it can recover", async () => {
     const llm = new FakeLlmClient([
       toolCalls({ name: "get_customer_history", args: { customer_id: "WRONG" } }),
@@ -155,6 +190,16 @@ describe("fail safe: always escalate to a human, never throw", () => {
     const result = await triageTicket(sampleTicket("T3"), { llm });
     expect(result).toMatchObject({ decision: "escalate_to_human", confidence: 0, route_team: "Support" });
     expect(result.internal_note).toContain("Request timed out.");
+  });
+
+  it("marks a rejected API key or model as a configuration error", async () => {
+    const events: AgentEvent[] = [];
+    const llm = new FakeLlmClient([new LlmConfigError("OpenAI rejected the request (401)")]);
+
+    const result = await triageTicket(sampleTicket("T3"), { llm, onEvent: (e) => events.push(e) });
+
+    expect(result.decision).toBe("escalate_to_human");
+    expect(events).toEqual([{ type: "fail_safe", reason: "OpenAI rejected the request (401)", configError: true }]);
   });
 
   it("still applies the policy to the fail-safe result", async () => {

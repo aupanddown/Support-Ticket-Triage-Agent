@@ -6,39 +6,72 @@ import type { RouteTeam, Ticket, TriageResult, Urgency } from "./schemas.js";
  *
  * The LLM is good at understanding tickets but can be wrong or manipulated (prompt injection),
  * so these rules have the final say. Every rule can only make the outcome safer: raise urgency,
- * hand the ticket to a human, or replace an unsafe reply. None of them can undo an escalation.
- * All functions here are pure: no I/O, no mutation of the input.
+ * hand the ticket to a human, assign a team, or replace an unsafe reply. None of them can undo
+ * an escalation. All functions here are pure: no I/O, no mutation of the input.
  */
+
+/** Evidence from tool results (see `Tool.facts`). Every field is optional: a tool may not have been called. */
+export interface PolicyFacts {
+  /** get_customer_history */
+  customerPlan?: string;
+  customerRegion?: string;
+  /** get_billing_transactions: a failed activation, or the same thing charged more than once. */
+  billingProblem?: boolean;
+  /** check_service_status: regions with a component that is not operational. */
+  degradedRegions?: string[];
+  /** search_knowledge_base: IDs of the articles actually returned. */
+  retrievedKbIds?: string[];
+}
 
 export interface PolicyContext {
   ticket: Ticket;
-  /** IDs of KB articles the knowledge base tool actually returned during this run. */
-  retrievedKbIds: readonly string[];
-  /** Plan from get_customer_history, if it was called. More reliable than the free-text customer info. */
-  customerPlan?: string;
+  facts: PolicyFacts;
 }
 
-interface Rule {
+export interface Rule {
   id: string;
   apply(result: TriageResult, ctx: PolicyContext): TriageResult;
 }
 
 // ---------- Signals (English and Thai) ----------
-// Each signal is matched on the ticket text OR on the model's own classification. Using the model's
-// classification only ever adds escalations, so a fooled model cannot use it to avoid one.
+// Each signal combines specific phrases in the ticket, facts from the tools, and the model's own
+// classification. Using the model's classification only ever ADDS escalations, so a fooled model
+// cannot use it to avoid one. Single words ("refund", "dispute", "down") are not enough on their own.
 
-// Money matters only a human may decide: refunds, disputes, duplicate, unexpected or failed charges.
-// Plain pricing or invoice questions are deliberately NOT matched, so the KB can answer them.
-const MONEY_RISK_TEXT =
-  /\b(refunds?|refunded|chargebacks?|disputes?|disputing|reversed|reversal|money back|unauthori[sz]ed|charged (twice|again|\w+ times)|(double|duplicate|multiple|two|three|\d+) (pending )?charges|payments? (failed|declined)|failed payments?)\b|คืนเงิน|เงินคืน|ตัดเงินซ้ำ|หักเงินซ้ำ|ถูกตัดเงิน|ถูกหักเงิน|ชำระเงินไม่สำเร็จ|จ่ายเงินไม่ผ่าน/i;
-const MONEY_RISK_ISSUE_TYPE = /refund|duplicate_charge|chargeback|dispute|payment_fail|overcharg/i;
+// A money matter only a human may decide: asking for a refund, a dispute with the bank,
+// duplicate, failed or unauthorized charges. "What is your refund policy?" is not one.
+const MONEY_RISK_TEXT = new RegExp(
+  [
+    String.raw`\b(refund me|money back|chargebacks?)\b`,
+    String.raw`\b(want|need|get|request|requesting|asking for|issue|give me|process)\s+(me\s+)?(a\s+|my\s+)?(full\s+)?refund`,
+    String.raw`\bdisput\w*\b.{0,40}\b(bank|card|charges?|payments?|transactions?)\b`,
+    String.raw`\b(charged|billed)\s+(me\s+)?(twice|again|two times|three times|multiple times|\d+ times)\b`,
+    String.raw`\b(double|duplicate|unauthori[sz]ed)\s+(charges?|payments?|transactions?)\b`,
+    String.raw`\b(see|have|got|there are|now)\s+(double|multiple|two|three|\d+)\s+(pending\s+)?charges\b`,
+    String.raw`\bcharges?\s+(\w+\s+){0,2}reversed\b`,
+    String.raw`\b(payments?\s+(failed|declined|did not go through|didn't go through)|failed payments?)\b`,
+    "ขอคืนเงิน|ขอเงินคืน|คืนเงินให้|ตัดเงินซ้ำ|หักเงินซ้ำ|เรียกเก็บซ้ำ|จ่ายเงินไม่ผ่าน|ชำระเงินไม่สำเร็จ",
+  ].join("|"),
+  "i",
+);
+const MONEY_RISK_ISSUE_TYPE =
+  /refund_request|duplicate_charge|double_charge|chargeback|payment_dispute|payment_failed|failed_payment|overcharg|unauthorized_charge/i;
 
-// Evidence that the product is down, not just words like "coworkers" or "down".
-const OUTAGE_TEXT =
-  /\b(outage|error\s*5\d\d|5\d\d\s*error|http\s*5\d\d|(can'?t|cannot|unable to) (access|log ?in|sign in)|is down|went down)\b|เข้าไม่ได้|ใช้งานไม่ได้|ล่ม/i;
+// The product is down for the customer: server errors, many people affected, or a stated outage.
+// One person who cannot log in is not an outage.
+const OUTAGE_TEXT = new RegExp(
+  [
+    String.raw`\b(outage|error\s*5\d\d|5\d\d\s*error|http\s*5\d\d)\b`,
+    String.raw`\b(app|site|system|service|platform|website)\s+(is|went)\s+down\b`,
+    String.raw`\b(coworkers|colleagues|everyone|nobody|no one|whole team|all (of )?(our|my) users)\b.{0,30}\b(can'?t|cannot|unable to)\b`,
+    "ระบบล่ม|ระบบเข้าไม่ได้|ระบบใช้งานไม่ได้|(เพื่อนร่วมงาน|ทุกคน).{0,15}(เข้าไม่ได้|ใช้งานไม่ได้|ใช้ไม่ได้)",
+  ].join("|"),
+  "i",
+);
 const OUTAGE_ISSUE_TYPE = /outage|incident|downtime/i;
 
 const ENTERPRISE = /\benterprise\b/i;
+const FOLLOW_UP_ISSUE_TYPE = /bug|feature/i;
 
 // Phrases that promise or confirm a refund or compensation. Best effort: replies on money
 // tickets are escalated anyway, so a human reviews them before anything is sent.
@@ -46,22 +79,38 @@ const REFUND_PROMISE_PATTERNS: readonly RegExp[] = [
   /\b(we|i)('ll|'ve| will| have| am going to| are going to)\s+(\w+\s+){0,5}(refund|reverse|reimburse|credit)/i,
   /\b(team|billing)\s+will\s+(\w+\s+){0,2}(refund|reverse|reimburse)/i,
   /\b(refunds?|reversals?|reimbursements?)\s+(has|have|will|is|are)\s+(been\s+)?(be\s+)?(issued|processed|approved|initiated|sent)/i,
+  /\b(will|shall)\s+be\s+(fully\s+)?(refunded|reversed|reimbursed|credited|returned)\b/i,
+  /\b(has|have)\s+been\s+(fully\s+)?(refunded|reversed|reimbursed|credited)\b/i,
   /\byou('ll| will)\s+(\w+\s+){0,3}(get|receive|see)\s+(\w+\s+){0,3}(refund|money back)/i,
   /\bguarantee\w*\b.*\brefund/i,
-  /จะคืนเงิน|คืนเงินให้/,
+  /จะ.{0,20}คืนเงิน|คืนเงินให้/,
 ];
 
-function customerText(ticket: Ticket): string {
-  return ticket.messages.map((m) => m.text).join("\n");
+/**
+ * Normalizes quotes before matching: models often write typographic quotes ("We’ll") instead of "We'll".
+ * (Not NFKC: it would split the Thai vowel "ำ" into two characters and break the Thai patterns.)
+ */
+function normalize(text: string): string {
+  return text.replace(/[‘’ʼ`´]/g, "'").replace(/[“”]/g, '"');
 }
 
-/** True when the ticket raises a money matter that only a human in Billing may decide. */
+function customerText(ticket: Ticket): string {
+  return normalize(ticket.messages.map((m) => m.text).join("\n"));
+}
+
+/** True when the ticket text raises a money matter that only a human in Billing may decide. */
 export function mentionsMoneyRisk(ticket: Ticket): boolean {
   return MONEY_RISK_TEXT.test(customerText(ticket));
 }
 
+/** True when the ticket text describes an outage rather than a single user's problem. */
+export function mentionsOutage(ticket: Ticket): boolean {
+  return OUTAGE_TEXT.test(customerText(ticket));
+}
+
 export function promisesRefund(reply: string): boolean {
-  return REFUND_PROMISE_PATTERNS.some((pattern) => pattern.test(reply));
+  const text = normalize(reply);
+  return REFUND_PROMISE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 // ---------- Safe fallback replies (never promise refunds or compensation) ----------
@@ -117,16 +166,17 @@ export const RULES: readonly Rule[] = [
   {
     // The model may cite article IDs it never retrieved (hallucination). Keep only real ones.
     id: "verified_kb_articles",
-    apply: (result, ctx) => ({
+    apply: (result, { facts }) => ({
       ...result,
-      kb_articles_used: result.kb_articles_used.filter((id) => ctx.retrievedKbIds.includes(id)),
+      kb_articles_used: result.kb_articles_used.filter((id) => facts.retrievedKbIds?.includes(id)),
     }),
   },
   {
     // Rule 1: refunds, disputes, duplicate or failed charges always go to a human in Billing.
     id: "R1_money_to_billing",
-    apply: (result, ctx) => {
-      const moneyRisk = mentionsMoneyRisk(ctx.ticket) || MONEY_RISK_ISSUE_TYPE.test(result.extracted.issue_type);
+    apply: (result, { ticket, facts }) => {
+      const moneyRisk =
+        mentionsMoneyRisk(ticket) || facts.billingProblem === true || MONEY_RISK_ISSUE_TYPE.test(result.extracted.issue_type);
       if (!moneyRisk) return result;
       return { ...escalate(result, "Billing"), urgency: atLeast(result.urgency, "high") };
     },
@@ -134,19 +184,23 @@ export const RULES: readonly Rule[] = [
   {
     // Rule 1 (reply part): never promise a refund, whatever the ticket says.
     id: "R1_no_refund_promise",
-    apply: (result, ctx) => {
+    apply: (result, { ticket }) => {
       if (!promisesRefund(result.customer_reply_draft)) return result;
-      const safe = { ...result, customer_reply_draft: safeReply(safeReplyLanguage(ctx.ticket), "billing") };
+      const safe = { ...result, customer_reply_draft: safeReply(safeReplyLanguage(ticket), "billing") };
       return escalate(safe, "Billing");
     },
   },
   {
     // Rule 2: an Enterprise customer with an outage is a critical incident.
     id: "R2_enterprise_outage",
-    apply: (result, ctx) => {
-      const isEnterprise = ENTERPRISE.test(ctx.customerPlan ?? ctx.ticket.customer.info);
+    apply: (result, { ticket, facts }) => {
+      // Enterprise if EITHER source says so, so a lookup can never make the outcome less safe.
+      const isEnterprise = ENTERPRISE.test(ticket.customer.info) || ENTERPRISE.test(facts.customerPlan ?? "");
+      const regionDegraded =
+        facts.customerRegion !== undefined && (facts.degradedRegions ?? []).includes(facts.customerRegion);
       const isOutage =
-        OUTAGE_TEXT.test(customerText(ctx.ticket)) ||
+        regionDegraded ||
+        mentionsOutage(ticket) ||
         OUTAGE_ISSUE_TYPE.test(result.extracted.issue_type) ||
         result.route_team === "Engineering_Incident";
       if (!isEnterprise || !isOutage) return result;
@@ -173,8 +227,8 @@ export const RULES: readonly Rule[] = [
   {
     // Rule 5: the reply must be written in the same script as the ticket (e.g. Thai for a Thai ticket).
     id: "R5_reply_language",
-    apply: (result, ctx) => {
-      const ticketScript = detectScript(customerText(ctx.ticket));
+    apply: (result, { ticket }) => {
+      const ticketScript = detectScript(customerText(ticket));
       const replyScript = detectScript(result.customer_reply_draft);
 
       // Thai is detected reliably, so correct an obviously wrong label. Other labels are left to the model.
@@ -190,6 +244,16 @@ export const RULES: readonly Rule[] = [
       const template = result.route_team === "Billing" ? "billing" : "general";
       const replaced = language ? { ...labeled, customer_reply_draft: safeReply(language, template) } : labeled;
       return escalate(replaced);
+    },
+  },
+  {
+    // Every ticket that needs a person has an owner: a bug or feature request goes to Product even when the
+    // reply is sent automatically, and any routed or escalated ticket without a team goes to Support.
+    id: "team_assigned",
+    apply: (result) => {
+      if (result.route_team !== null) return result;
+      if (result.decision !== "auto_respond") return { ...result, route_team: "Support" };
+      return FOLLOW_UP_ISSUE_TYPE.test(result.extracted.issue_type) ? { ...result, route_team: "Product" } : result;
     },
   },
 ];

@@ -94,15 +94,22 @@ async function main(): Promise<void> {
 
     let toolCalls = 0;
     let failSafe: string | undefined;
+    let configError = false;
     const started = performance.now();
     const result = await triageTicket(ticket, {
       llm,
       onEvent: (event) => {
-        if (event.type === "tool_call") toolCalls++;
-        else failSafe = event.reason;
+        if (event.type === "tool_call") {
+          toolCalls++;
+        } else {
+          failSafe = event.reason;
+          configError = event.configError;
+        }
       },
     });
     const seconds = (performance.now() - started) / 1000;
+    // A rejected key or model fails every case the same way: stop instead of scoring fake escalations.
+    if (configError && failSafe) throw new Error(failSafe);
 
     const checks = evaluateCase(goldenCase, ticket, result);
     reports.push({ ticketId: ticket.id, set: goldenCase.set, checks, toolCalls, seconds, failSafe, result });

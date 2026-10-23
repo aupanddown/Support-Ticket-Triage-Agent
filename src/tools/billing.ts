@@ -2,6 +2,8 @@ import { z } from "zod";
 import accounts from "../../data/billing.json" with { type: "json" };
 import { defineTool } from "./tool.js";
 
+type Account = (typeof accounts)[number];
+
 export const billingTool = defineTool({
   name: "get_billing_transactions",
   description:
@@ -15,4 +17,12 @@ export const billingTool = defineTool({
     if (!account) throw new Error(`No billing account found for customer "${customer_id}"`);
     return account;
   },
+  facts: (data) => ({ billingProblem: hasBillingProblem(data as Account) }),
 });
+
+/** A problem only a human can fix: a failed plan activation, or the same thing charged more than once. */
+export function hasBillingProblem(account: Account): boolean {
+  if (account.pending_upgrade?.status === "activation_failed") return true;
+  const captured = account.transactions.filter((t) => t.status === "captured").map((t) => t.description);
+  return new Set(captured).size < captured.length;
+}

@@ -43,6 +43,12 @@ export interface LlmClient {
   complete(request: LlmRequest): Promise<LlmResponse>;
 }
 
+/**
+ * The provider rejected the API key, the permissions or the model. Unlike a timeout, retrying
+ * or moving on to the next ticket will not help, so callers like the CLI can stop with a clear message.
+ */
+export class LlmConfigError extends Error {}
+
 // ---------- OpenAI implementation ----------
 
 export class OpenAiLlmClient implements LlmClient {
@@ -52,15 +58,28 @@ export class OpenAiLlmClient implements LlmClient {
   ) {}
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
-    const completion = await this.openai.chat.completions.create({
-      model: this.model,
-      messages: request.messages.map(toOpenAiMessage),
-      tools: request.tools.map(toOpenAiTool),
-      tool_choice: request.toolChoice,
-      // Used only when the model answers instead of calling a tool.
-      response_format: zodResponseFormat(request.output.schema, request.output.name),
-    });
-    return fromOpenAiCompletion(completion);
+    try {
+      const completion = await this.openai.chat.completions.create({
+        model: this.model,
+        messages: request.messages.map(toOpenAiMessage),
+        tools: request.tools.map(toOpenAiTool),
+        tool_choice: request.toolChoice,
+        // Used only when the model answers instead of calling a tool.
+        response_format: zodResponseFormat(request.output.schema, request.output.name),
+      });
+      return fromOpenAiCompletion(completion);
+    } catch (error) {
+      if (
+        error instanceof OpenAI.AuthenticationError ||
+        error instanceof OpenAI.PermissionDeniedError ||
+        error instanceof OpenAI.NotFoundError
+      ) {
+        throw new LlmConfigError(
+          `OpenAI rejected the request: ${error.message.replace(/\.+$/, "")}. Check OPENAI_API_KEY and OPENAI_MODEL ("${this.model}").`,
+        );
+      }
+      throw error;
+    }
   }
 }
 

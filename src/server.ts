@@ -27,7 +27,15 @@ export function buildServer({ llm, logger = false }: ServerOptions): FastifyInst
     // triageTicket never throws: failures come back as an escalate_to_human result.
     const result = await triageTicket(ticket, {
       llm,
-      onEvent: (event) => request.log.info({ ticketId: ticket.id, ...event }, `agent ${event.type}`),
+      // Logs what happened, not the tool results themselves: those contain customer data.
+      onEvent: (event) => {
+        if (event.type === "tool_call") {
+          request.log.info({ ticketId: ticket.id, tool: event.call.name, ok: event.result.ok }, "agent tool_call");
+        } else {
+          const log = event.configError ? request.log.error : request.log.warn;
+          log.call(request.log, { ticketId: ticket.id, reason: event.reason }, "agent fail_safe");
+        }
+      },
     });
     if (result.guardrails_applied.length > 0) {
       request.log.info({ ticketId: ticket.id, guardrails: result.guardrails_applied }, "policy guardrails applied");

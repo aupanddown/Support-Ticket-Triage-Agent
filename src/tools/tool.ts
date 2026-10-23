@@ -1,11 +1,13 @@
 import type { z } from "zod";
+import type { PolicyFacts } from "../policy.js";
 
 /**
  * A capability the agent can call.
  *
  * Least privilege: every tool is READ-ONLY. A handler may look things up but must never
  * change state (no refunds, no plan changes, no outgoing messages). Anything that moves
- * money or changes an account is done by a human after escalation.
+ * money or changes an account is done by a human after escalation. Tools that take a
+ * `customer_id` can only look up the ticket's own customer (enforced in tools/index.ts).
  */
 export interface Tool<Args extends z.ZodObject = z.ZodObject> {
   /** Name the model uses to call the tool, in snake_case. */
@@ -16,6 +18,11 @@ export interface Tool<Args extends z.ZodObject = z.ZodObject> {
   args: Args;
   /** Receives validated arguments. Throw an Error to report a problem back to the model. */
   handler(args: z.infer<Args>): Promise<unknown>;
+  /**
+   * Optional: evidence for the guardrail policy taken from this tool's result
+   * (e.g. the customer's plan). Lets the policy rely on data instead of the model's words.
+   */
+  facts?(data: unknown): PolicyFacts;
 }
 
 /** Identity helper so TypeScript infers the handler's argument type from `args`. */

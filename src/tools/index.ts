@@ -39,12 +39,22 @@ export function getToolSpecs(tools: readonly Tool[] = TOOLS): ToolSpec[] {
   });
 }
 
+/** Limits what a tool call may look up while triaging one ticket. */
+export interface ToolScope {
+  /** The ticket's customer: the only customer_id a tool may be called with. */
+  customerId: string;
+}
+
 /**
  * Runs a tool call from the model.
- * Problems (unknown tool, bad JSON, invalid args, handler error) are returned as
- * `{ ok: false, error }` instead of thrown, so the model can read the error and recover.
+ * Problems (unknown tool, bad JSON, invalid args, out-of-scope customer, handler error) are returned
+ * as `{ ok: false, error }` instead of thrown, so the model can read the error and recover.
  */
-export async function executeTool(call: ToolCall, tools: readonly Tool[] = TOOLS): Promise<ToolResult> {
+export async function executeTool(
+  call: ToolCall,
+  tools: readonly Tool[] = TOOLS,
+  scope?: ToolScope,
+): Promise<ToolResult> {
   const tool = tools.find((t) => t.name === call.name);
   if (!tool) return { ok: false, error: `Unknown tool "${call.name}"` };
 
@@ -58,6 +68,12 @@ export async function executeTool(call: ToolCall, tools: readonly Tool[] = TOOLS
   const parsed = tool.args.safeParse(rawArgs);
   if (!parsed.success) {
     return { ok: false, error: `Invalid arguments for ${call.name}: ${z.prettifyError(parsed.error)}` };
+  }
+
+  // Least privilege: even a manipulated model can only read the ticket's own customer's data.
+  const customerId = (parsed.data as { customer_id?: unknown }).customer_id;
+  if (scope && customerId !== undefined && customerId !== scope.customerId) {
+    return { ok: false, error: `Only the ticket's customer (${scope.customerId}) can be looked up` };
   }
 
   try {
