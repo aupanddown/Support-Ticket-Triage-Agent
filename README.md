@@ -143,9 +143,84 @@ The JSON Schema for the model is generated from the zod schema, arguments are va
 
 ## Sample output
 
-Real results from `npm run triage -- --all` with `gpt-5.4-mini`:
+Real results for the three sample tickets, produced with `gpt-5.4-mini` by `npm run eval` (the same agent and policy as `npm run triage`). Model output varies a little between runs.
 
-> _Pending: to be pasted from a real run._
+### T1: triple charge, presentation in 2 hours
+
+```json
+{
+  "ticket_id": "T1",
+  "urgency": "critical",
+  "extracted": {
+    "product": "Billing / Pro upgrade",
+    "issue_type": "duplicate_charge_plan_activation_failed",
+    "sentiment": "angry",
+    "language": "en"
+  },
+  "decision": "escalate_to_human",
+  "route_team": "Billing",
+  "kb_articles_used": [
+    "KB-201",
+    "KB-202",
+    "KB-203"
+  ],
+  "customer_reply_draft": "I’m sorry for the trouble here, especially with your presentation in 2 hours. I can see the upgrade attempt did not complete, and your account is still on Free even though the payment was captured.\n\nThere are 3 captured Pro upgrade charges on the account right now: TX-9001 ($29.99, card ending 4242), TX-9002 ($29.99, card ending 5511), and TX-9003 ($29.99, card ending 5511).\n\nThe right team has this now and will review the charges and the failed activation. They’ll also check why Pro was not enabled after payment.\n\nPlease don’t open a bank dispute yet, because that can make the investigation harder. The Billing team will review this as soon as possible.",
+  "internal_note": "Customer on Free plan attempted Pro upgrade 3 times today. Billing data shows pending_upgrade target Pro with status activation_failed, payment captured but plan activation did not complete. Transactions captured: TX-9001 29.99 USD card 4242, TX-9002 29.99 USD card 5511, TX-9003 29.99 USD card 5511. Customer is angry, says they need Pro export features for a presentation in 2 hours and threatened to dispute all charges by end of day if not reversed. This involves multiple captured charges and account activation failure, so Billing should review urgently. Also relevant KB says pending authorizations can drop off in 3-5 business days, but these are captured charges, not just pending auths.",
+  "confidence": 0.97,
+  "guardrails_applied": []
+}
+```
+
+### T2: Enterprise outage in Thailand
+
+```json
+{
+  "ticket_id": "T2",
+  "urgency": "critical",
+  "extracted": {
+    "product": "Web App / Login",
+    "issue_type": "outage",
+    "sentiment": "angry",
+    "language": "th"
+  },
+  "decision": "escalate_to_human",
+  "route_team": "Engineering_Incident",
+  "kb_articles_used": [
+    "KB-301",
+    "KB-302",
+    "KB-401"
+  ],
+  "customer_reply_draft": "ขอบคุณที่แจ้งครับ ตอนนี้ผมตรวจพบว่าฝั่ง region Asia มีปัญหาจริง แม้ status.company.com จะยังแสดงว่า all systems operational อยู่ก็ตาม\n\nจากการตรวจสอบภายใน พบว่า Web App และ API ใน Asia อยู่ในสถานะ degraded และมี HTTP 500 error rate สูงตั้งแต่ประมาณ 2 ชั่วโมงที่แล้ว ซึ่งสอดคล้องกับอาการที่คุณเจอ, รวมถึงคนในทีมของคุณที่เข้าไม่ได้จากหลายเบราว์เซอร์และหลายเครื่อง\n\nเคสนี้ถูกส่งต่อให้ทีมที่เกี่ยวข้องแล้ว และกำลังตรวจสอบอยู่ เนื่องจากเป็น Enterprise account และกระทบผู้ใช้งานหลายคนกับเดโมบ่ายนี้ ทีมจะให้ความสำคัญสูงสุดครับ\n\nขออภัยในความไม่สะดวกอย่างมาก หากมีข้อมูลเพิ่ม เช่น เวลาที่เริ่มเกิดปัญหา หรือหน้าที่ขึ้น error 500 เป็นหน้าหลัก/บางฟีเจอร์เท่านั้น ส่งมาได้เลยครับ เราจะใช้ประกอบการตรวจสอบต่อ",
+  "internal_note": "Enterprise customer in Thailand/Asia, 45 seats, first critical issue. Thread shows multi-user access failure with HTTP 500 for 2 hours, multiple browsers/devices affected, and a hard business deadline: customer has a demo this afternoon and says the deal may be lost. Public status page still says all systems operational, but internal monitoring shows Asia Web App and API degraded since about 2 hours ago, HTTP 500 error rate 42% from ap-southeast load balancer. Route to Engineering_Incident. KB articles used support that this is likely a service issue and that public status may lag internal incidents. No billing aspect.",
+  "confidence": 0.98,
+  "guardrails_applied": []
+}
+```
+
+### T3: dark mode question, bug and feature request
+
+```json
+{
+  "ticket_id": "T3",
+  "urgency": "low",
+  "extracted": {
+    "product": "Appearance settings",
+    "issue_type": "how_to_feature_request",
+    "sentiment": "neutral",
+    "language": "en"
+  },
+  "decision": "auto_respond",
+  "route_team": "Product",
+  "kb_articles_used": [
+    "KB-101",
+    "KB-102"
+  ],
+  "customer_reply_draft": "Hi Taylor, thanks for checking and for the extra details.\n\nYes, on Pro you should see Light and System Default only, there is no separate Dark toggle yet. System Default follows your operating system theme, so if your Mac is set to dark mode the app should switch too.\n\nIf it is still showing light after you choose System Default, please try:\n1. Fully quit and reopen the app after changing your Mac theme\n2. Make sure you are on the latest app version\n3. If you are using the browser version, check whether any extension is forcing a light theme\n\nFor scheduling dark mode, we do not have an in-app schedule yet. The current workaround on macOS is to set Appearance to System Default and use macOS automatic switching: System Settings > Appearance > Auto.\n\nHelp article: https://help.company.com/articles/appearance-settings\nScheduling info: https://help.company.com/articles/schedule-theme\n\nIf you want, we can also pass the scheduling idea along as product feedback.",
+  "internal_note": "Customer on Pro plan, macOS desktop app, daily user, no prior tickets. Issue is twofold: how System Default works and a feature request for scheduled dark mode. KB says there is no separate Dark toggle, System Default should follow OS theme, and macOS Auto can schedule it. If System Default still stays light after quitting/reopening and updating, this could be a bug, but thread does not show they tried the troubleshooting yet. Route Product for feature request feedback if needed; no urgency, no money involved.",
+  "confidence": 0.95,
+  "guardrails_applied": []
+}
+```
 
 ## Assumptions
 
@@ -155,10 +230,6 @@ Real results from `npm run triage -- --all` with `gpt-5.4-mini`:
 - **The customer's plan comes from the ticket's customer info** for the policy (R2), and from `get_customer_history` for the model.
 - **Language detection supports English and Thai**, the two languages in the samples. Adding a language means adding a code in `src/language.ts` and its safe replies in `src/policy.ts`.
 - **Relative message times** ("3 hours ago") are kept as in the samples; a real system would use timestamps.
-
-## Time spent
-
-About _X_ hours.
 
 ## Future improvements
 
