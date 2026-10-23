@@ -33,7 +33,13 @@ npm ci
 cp .env.example .env
 ```
 
-(Windows: `copy .env.example .env` in cmd, `Copy-Item .env.example .env` in PowerShell.) Then set `OPENAI_API_KEY` in `.env`. `OPENAI_MODEL` is optional; the default is `gpt-5.4-mini`. Any other model must support function calling together with structured outputs (`json_schema`), for example `gpt-4.1-mini`. Run all commands from the repository root.
+(Windows: `copy .env.example .env` in cmd, `Copy-Item .env.example .env` in PowerShell.) Then set your own `OPENAI_API_KEY` in `.env`; no key is included in the repository. Alternatively, skip `.env` and set the key in your shell, which takes precedence:
+
+```bash
+OPENAI_API_KEY=your-key npm run triage -- --all
+```
+
+(PowerShell: `$env:OPENAI_API_KEY="your-key"; npm run triage -- --all`.) `OPENAI_MODEL` is optional; the default is `gpt-5.4-mini`. Any other model must support function calling together with structured outputs (`json_schema`), for example `gpt-4.1-mini`. Run all commands from the repository root.
 
 If OpenAI rejects the key, the model, or the account's quota, the commands stop with exit code 1 and say what to check. Other failures (a timeout, invalid model output) escalate that ticket to a human with the reason and print a warning.
 
@@ -42,7 +48,7 @@ If OpenAI rejects the key, the model, or the account's quota, the commands stop 
 ```bash
 npm run triage -- --ticket T1          # one sample ticket (T1, T2 or T3), printed as JSON
 npm run triage -- --all --verbose      # all sample tickets, also printing each tool call
-npm run triage -- --file tickets.json  # your own file: one ticket or an array, same shape as data/tickets.json
+npm run triage -- --file data/tickets.json   # any file with one ticket or an array, in this shape
 ```
 
 Results go to stdout as JSON; progress and tool calls go to stderr.
@@ -59,15 +65,16 @@ Also available: `npm run serve` starts an HTTP API (`POST /triage` with one tick
 
 ## Guardrail policy
 
-`src/policy.ts` runs after the model and can only make the outcome safer. Rules use structured evidence: the model's classification (`issue_types`, which can only add escalations, so a fooled model cannot use it to avoid one) and facts from the tools. The ticket text is never pattern-matched. Every change is recorded in `guardrails_applied` and appended to `internal_note`.
+`src/policy.ts` runs after the model and can only make the outcome safer. Rules use structured evidence: the model's classification (`issue_types`, which can only add escalations) and facts from the tools, which act on their own where the data is unambiguous, so a model that mislabels a ticket still cannot auto-respond to an unresolved payment or during an Enterprise incident. The ticket text is never pattern-matched. Every change is recorded in `guardrails_applied` and appended to `internal_note`.
 
 | Rule | Effect |
 |---|---|
 | verified KB articles | KB IDs the tools never returned are removed |
-| R1 money | `billing_dispute` (refund request, dispute, duplicate or failed charge): `escalate_to_human`, owner `Billing`, urgency at least `high` |
+| R1 money | `billing_dispute` (refund request, dispute, duplicate or failed charge), or an unresolved payment found by the billing tool (charged but the plan was not activated): `escalate_to_human`, owner `Billing`, urgency at least `high` |
 | R1 no refund promise | A reply that promises a refund, credit or compensation is replaced with a safe reply and escalated; Billing owns it or follows up |
 | R1 money reply reviewed | An automatic reply that mentions refunds, credits or compensation goes to a person first |
 | R2 enterprise outage | Enterprise plan (from the ticket or customer history) and an `outage`, or an access problem or bug while a component in the customer's region is degraded: `critical`, `escalate_to_human`, `Engineering_Incident` |
+| R2 no auto-reply during incident | Enterprise customer whose region is degraded: no automatic reply, a person checks it (not paged as an incident) |
 | critical to human | A `critical` ticket is always `escalate_to_human` |
 | R3 low confidence | Confidence below 0.7 is never auto-responded |
 | R4 auto-respond requirements | Only `low`/`medium` urgency with at least one KB article; otherwise a person or a specialist |
@@ -82,7 +89,7 @@ The reply checks are a backstop for replies sent automatically; on an escalated 
 |---|---|---|
 | `get_customer_history` | plan, seats, region, tenure, past tickets, notes | plan, region |
 | `search_knowledge_base` | up to 3 articles: id, title, url, snippet, score | IDs actually returned |
-| `get_billing_transactions` | current plan, pending upgrade, charges with status | none |
+| `get_billing_transactions` | current plan, pending upgrade, charges with status | unresolved payment |
 | `check_service_status` | public status page message, component status per region | degraded regions |
 
 To add a tool: create a file in `src/tools/` with `defineTool({ name, description, args, handler })` and add it to `TOOLS` in `src/tools/index.ts`. The JSON Schema for the model is generated from the zod `args`, arguments are validated before the handler runs, and errors are returned to the model instead of crashing the agent. Optionally set `customerIdArg` (customer lookups) and `facts` (evidence for a rule, declared in `PolicyFacts`). A test fails until the tool is mentioned in `src/prompts/system_prompt.md`.

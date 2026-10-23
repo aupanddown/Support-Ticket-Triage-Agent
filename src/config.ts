@@ -11,7 +11,7 @@ const EnvSchema = z.object({
   // The OpenAI client checks for it when it is actually created (CLI and server fail fast).
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default(DEFAULT_MODEL),
-  OPENAI_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  OPENAI_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   // The OpenAI SDK retries 408/409/429/5xx and connection errors with exponential backoff.
   OPENAI_MAX_RETRIES: z.coerce.number().int().min(0).default(2),
   PORT: z.coerce.number().int().positive().default(3000),

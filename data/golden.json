@@ -72,7 +72,10 @@
         "error rate",
         "Engineering_Incident",
         "regional incident",
-        "ยังไม่ถูกประกาศ"
+        "ยังไม่ถูกประกาศ",
+        "พบว่า",
+        "ตรวจพบ",
+        "(we|we have|we\\'ve)\\s+(found|confirmed)"
       ]
     }
   },

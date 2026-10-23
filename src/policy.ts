@@ -11,10 +11,15 @@ import type { IssueType, RouteTeam, Ticket, TriageResult, Urgency } from "./sche
  *
  * Rules rely on structured evidence: the model's classification (`issue_types`), which can only
  * ADD escalations, so a fooled model cannot use it to avoid one; and facts from tool results.
- * The ticket text itself is never pattern-matched. Only the reply is checked, as a backstop for
- * replies that may be SENT AUTOMATICALLY: an escalated ticket's reply is a draft that a person
- * reads before sending.
+ * Tool facts also act on their own where the data is unambiguous (an unresolved payment, a degraded
+ * region for an Enterprise customer), so a model that mislabels a ticket cannot auto-respond to it.
+ * The ticket text itself is never pattern-matched. The reply is checked for refund promises (replaced
+ * on any ticket) and, on automatic replies only, for money talk; an escalated ticket's reply is a
+ * draft that a person reads before sending.
  */
+
+/** Below this confidence a ticket is never answered automatically (also stated in the system prompt). */
+export const AUTO_RESPOND_MIN_CONFIDENCE = 0.7;
 
 /**
  * Evidence from tool results (see `Tool.facts`). Every field is optional: a tool may not have been
@@ -24,6 +29,8 @@ export interface PolicyFacts {
   /** get_customer_history */
   customerPlan?: string;
   customerRegion?: string;
+  /** get_billing_transactions: a plan activation failed after the customer was charged. */
+  unresolvedPayment?: boolean;
   /** check_service_status: regions with a component that is not operational. */
   degradedRegions?: string[];
   /** search_knowledge_base: IDs of the articles actually returned. */
@@ -49,7 +56,9 @@ const ENTERPRISE_PLAN = /^\s*enterprise\b/i;
 // Replies that promise or confirm a refund, credit or compensation. Only a human in Billing may decide that.
 // "I will pass your refund request to Billing" is not a promise.
 const REFUND_PROMISE_PATTERNS: readonly RegExp[] = [
-  /\b(we|i)('ll|'re|'ve| will| are| have| am| am going to| are going to)\s+(\w+\s+){0,5}(refund|reimburse|reverse)(d|ing)?\b(?!\s+(request|policy|process|team|department))/i,
+  /\b(we|i)('ll|'re|'ve| will| are| have| am| am going to| are going to)\s+(\w+\s+){0,5}(?<!\bfor\s+(a\s+)?)(refund|reimburse|reverse)(d|ing)?\b(?!\s+(request|policy|process|team|department))/i,
+  /\b(we|i|team|billing)\s+(can|could|is going to|are going to|will be able to)\s+(\w+\s+){0,2}(refund|reimburse|reverse)\b(?!\s+(request|policy|process))/i,
+  /\byou('ll| will)\s+be\s+(fully\s+)?(refunded|reimbursed|credited)\b/i,
   /\b(we|i)('ll|'re| will| are| am)\s+(\w+\s+){0,3}(issu\w*|giv\w*|add\w*|appl\w*)\s+(you\s+|your account\s+)?(a\s+|an\s+)?(full\s+|partial\s+)?(refund|credit|discount)\b/i,
   /\bcredit\w*\s+(to\s+)?(your|the)\s+account\b/i,
   /\b(team|billing)\s+will\s+(\w+\s+){0,2}(refund|reimburse|reverse)\b(?!\s+(request|policy|process))/i,
@@ -60,14 +69,15 @@ const REFUND_PROMISE_PATTERNS: readonly RegExp[] = [
   /\b(as (an apology|compensation)|by way of compensation)\b/i,
   /\b(a\s+)?(month|months|week|weeks)\s+(for\s+)?free\b|\bfree\s+(month|months|week|weeks)\b/i,
   /\bguarantee\w*\b.*\brefund/i,
-  /จะ.{0,20}คืนเงิน|คืนเงินให้|ชดเชยให้/,
+  // Thai: "will refund", "refund you", "compensate you"; not "your refund request" (คำขอคืนเงิน).
+  /จะ.{0,20}(?<!ขอ)คืนเงิน|(?<!ขอ)คืนเงินให้|ชดเชยให้/,
 ];
 
 // Money words in a reply. An AUTOMATIC reply that talks about money is reviewed by a human,
 // even when no promise pattern matched. Broad on purpose: a false positive only adds a review.
 // ("credit card" / "บัตรเครดิต" is not counted.)
 const MONEY_IN_REPLY =
-  /\b(refund\w*|reimburs\w*|compensat\w*|chargebacks?|money back|credit(?![- ]?card)\w*)\b|คืนเงิน|ชดเชย|(?<!บัตร)เครดิต/i;
+  /\b(refund\w*|reimburs\w*|compensat\w*|chargebacks?|money back|credit(?![- ]?card)\w*|revers(e|ed|al)\s+(\w+\s+){0,2}(charges?|payments?|transactions?))\b|คืนเงิน|ชดเชย|(?<!บัตร)เครดิต/i;
 
 /**
  * Normalizes quotes before matching: models often write typographic quotes instead of "We'll".
@@ -136,6 +146,16 @@ function hasIssue(result: TriageResult, ...types: IssueType[]): boolean {
   return types.some((type) => result.extracted.issue_types.includes(type));
 }
 
+/** Enterprise if EITHER the ticket or customer history says so, so a lookup can never make the outcome less safe. */
+function isEnterprise(ticket: Ticket, facts: PolicyFacts): boolean {
+  return ENTERPRISE_PLAN.test(ticket.customer.info) || facts.customerPlan === "Enterprise";
+}
+
+/** A component is not operational in the customer's own region (needs both lookups). */
+function regionDegraded(facts: PolicyFacts): boolean {
+  return facts.customerRegion !== undefined && (facts.degradedRegions ?? []).includes(facts.customerRegion);
+}
+
 /** Adds a follow-up team, unless it already owns the ticket or is listed. */
 function addFollowUp(result: TriageResult, team: RouteTeam): TriageResult {
   if (result.route_team === team || result.follow_up_teams.includes(team)) return result;
@@ -172,9 +192,10 @@ export const RULES: readonly Rule[] = [
   },
   {
     // Rule 1: refunds, disputes, duplicate or failed charges always go to a human in Billing.
+    // An unresolved payment found by the billing tool counts too, whatever the model's labels say.
     id: "R1_money_to_billing",
-    apply: (result) => {
-      if (!hasIssue(result, "billing_dispute")) return result;
+    apply: (result, { facts }) => {
+      if (!hasIssue(result, "billing_dispute") && facts.unresolvedPayment !== true) return result;
       return { ...escalate(result, "Billing"), urgency: atLeast(result.urgency, "high") };
     },
   },
@@ -204,13 +225,18 @@ export const RULES: readonly Rule[] = [
     // the customer's region confirms an access problem or bug as an outage; a how-to stays a how-to.
     id: "R2_enterprise_outage",
     apply: (result, { ticket, facts }) => {
-      // Enterprise if EITHER source says so, so a lookup can never make the outcome less safe.
-      const isEnterprise = ENTERPRISE_PLAN.test(ticket.customer.info) || facts.customerPlan === "Enterprise";
-      const regionDegraded =
-        facts.customerRegion !== undefined && (facts.degradedRegions ?? []).includes(facts.customerRegion);
-      const isOutage = hasIssue(result, "outage") || (regionDegraded && hasIssue(result, "access_problem", "bug"));
-      if (!isEnterprise || !isOutage) return result;
+      const isOutage = hasIssue(result, "outage") || (regionDegraded(facts) && hasIssue(result, "access_problem", "bug"));
+      if (!isEnterprise(ticket, facts) || !isOutage) return result;
       return { ...escalate(result, "Engineering_Incident"), urgency: "critical" };
+    },
+  },
+  {
+    // During an incident in an Enterprise customer's region, a person checks the ticket before any
+    // reply goes out, even if the model calls it a how-to. It is not paged as an incident.
+    id: "R2_no_auto_reply_during_incident",
+    apply: (result, { ticket, facts }) => {
+      if (!isEnterprise(ticket, facts) || !regionDegraded(facts) || result.decision !== "auto_respond") return result;
+      return { ...result, decision: "route_to_specialist", route_team: "Support" };
     },
   },
   {
@@ -223,7 +249,7 @@ export const RULES: readonly Rule[] = [
     // Rule 3: a low-confidence answer must not be sent automatically.
     id: "R3_low_confidence",
     apply: (result) =>
-      result.decision === "auto_respond" && result.confidence < 0.7 ? escalate(result) : result,
+      result.decision === "auto_respond" && result.confidence < AUTO_RESPOND_MIN_CONFIDENCE ? escalate(result) : result,
   },
   {
     // Rule 4: auto-respond only for low/medium urgency backed by at least one KB article.

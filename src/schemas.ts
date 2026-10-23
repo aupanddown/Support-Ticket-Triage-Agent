@@ -57,6 +57,7 @@ export type Ticket = z.infer<typeof Ticket>;
 
 export const ExtractedInfo = z.object({
   product: ProductArea.describe("Product area the ticket is mainly about"),
+  product_detail: z.string().describe('The specific product or feature, e.g. "Pro plan upgrade", "Web App (Asia region)"'),
   issue_types: z.array(IssueType).min(1).describe("Every issue in the thread, the most important first"),
   sentiment: Sentiment,
   language: z.string().describe('ISO 639-1 code of the language the customer writes in, e.g. "en" or "th"'),

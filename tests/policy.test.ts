@@ -123,6 +123,11 @@ describe("R1: money matters go to a human in Billing", () => {
     "As an apology we are crediting your account.",
     "เราจะคืนเงินให้ภายในวันนี้ครับ",
     "เราจะดำเนินการคืนเงินให้ครับ",
+    // "can", "going to", passive "you'll be".
+    "We can refund the two duplicate charges.",
+    "Our team is going to refund you.",
+    "You'll be reimbursed shortly.",
+    "Billing can reverse the duplicate charges today.",
   ])("flags a refund promise: %s", (reply) => {
     expect(promisesRefund(reply)).toBe(true);
   });
@@ -131,6 +136,12 @@ describe("R1: money matters go to a human in Billing", () => {
     expect(promisesRefund("We'll check your credit card details.")).toBe(false);
     expect(mentionsMoneyInReply("Pay with any credit card in Settings > Billing.")).toBe(false);
     expect(mentionsMoneyInReply("ชำระผ่านบัตรเครดิตได้ครับ")).toBe(false);
+  });
+
+  it("sends an unresolved payment to Billing even when the model calls it a how-to", () => {
+    // T1's billing data: activation failed after the customer was charged.
+    const result = run(makeResult(), sampleTicket("T1"), { unresolvedPayment: true });
+    expect(result).toMatchObject({ decision: "escalate_to_human", route_team: "Billing", urgency: "high" });
   });
 
   it("sends an automatic reply that talks about money to a human, even without a clear promise", () => {
@@ -146,6 +157,8 @@ describe("R1: money matters go to a human in Billing", () => {
     "Pending authorizations usually drop off within 3 to 5 business days.",
     "I will escalate this reversal request to Billing right away.",
     "I will pass your refund request to our billing team.",
+    "I've passed your request for a refund to our billing team.",
+    "ทีมการเงินจะตรวจสอบคำขอคืนเงินของคุณครับ",
   ])("does not flag a safe reply: %s", (reply) => {
     expect(promisesRefund(reply)).toBe(false);
   });
@@ -168,7 +181,7 @@ describe("R2: Enterprise outage is a critical incident", () => {
     decision: "route_to_specialist",
     route_team: "Support",
     customer_reply_draft: "ขออภัยในความไม่สะดวกครับ ทีมงานกำลังตรวจสอบให้ครับ",
-    extracted: { product: "platform", issue_types: ["outage"], sentiment: "negative", language: "th" },
+    extracted: { product: "platform", product_detail: "Web App", issue_types: ["outage"], sentiment: "negative", language: "th" },
   });
 
   it("makes T2 critical and escalates it to Engineering_Incident", () => {
@@ -229,6 +242,21 @@ describe("R2: Enterprise outage is a critical incident", () => {
   });
 });
 
+describe("R2_no_auto_reply_during_incident", () => {
+  const degraded = { customerRegion: "asia", degradedRegions: ["asia"] };
+
+  it("holds an Enterprise auto-reply for a person while the customer's region is degraded", () => {
+    const result = run(makeResult(), makeTicket(["How do I export to PDF?"], "Enterprise plan"), degraded);
+    expect(result).toMatchObject({ decision: "route_to_specialist", route_team: "Support", urgency: "low" });
+  });
+
+  it("does nothing for other plans or healthy regions", () => {
+    expect(run(makeResult(), makeTicket(["How do I export?"], "Pro plan"), degraded).decision).toBe("auto_respond");
+    const healthy = { customerRegion: "us", degradedRegions: ["asia"] };
+    expect(run(makeResult(), makeTicket(["How do I export?"], "Enterprise plan"), healthy).decision).toBe("auto_respond");
+  });
+});
+
 describe("critical_to_human: critical tickets always go to a person now", () => {
   it.each(["auto_respond", "route_to_specialist"] as const)("escalates a critical %s", (decision) => {
     const result = run(makeResult({ urgency: "critical", decision, route_team: "Product" }));
@@ -269,7 +297,7 @@ describe("R5: reply written in the ticket's script", () => {
       decision: "escalate_to_human",
       route_team: "Engineering_Incident",
       customer_reply_draft: "We are looking into the error 500 in the Asia region.",
-      extracted: { product: "platform", issue_types: ["outage"], sentiment: "negative", language: "en" },
+      extracted: { product: "platform", product_detail: "Web App", issue_types: ["outage"], sentiment: "negative", language: "en" },
     });
     const result = run(llm, sampleTicket("T2"));
     expect(detectScript(result.customer_reply_draft)).toBe("thai");

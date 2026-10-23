@@ -16,4 +16,9 @@ export const billingTool = defineTool({
     if (!account) throw new Error(`No billing account found for customer "${customer_id}"`);
     return account;
   },
+  // Paid but not delivered: the plan activation failed and the customer has been charged.
+  facts: ({ pending_upgrade, transactions }) => ({
+    unresolvedPayment:
+      pending_upgrade?.status === "activation_failed" && transactions.some((t) => t.status === "captured"),
+  }),
 });

@@ -8,7 +8,13 @@ import { sampleTicket } from "./fixtures.js";
 /** A good model answer for T3 (dark mode question). */
 const T3_OUTPUT: LlmTriageOutput = {
   urgency: "low",
-  extracted: { product: "appearance", issue_types: ["how_to", "bug", "feature_request"], sentiment: "positive", language: "en" },
+  extracted: {
+    product: "appearance",
+    product_detail: "Dark mode",
+    issue_types: ["how_to", "bug", "feature_request"],
+    sentiment: "positive",
+    language: "en",
+  },
   decision: "auto_respond",
   route_team: null,
   follow_up_teams: ["Product"],
@@ -27,7 +33,7 @@ const T2_LIKE_OUTPUT: LlmTriageOutput = {
   follow_up_teams: [],
   kb_articles_used: [],
   customer_reply_draft: "ขออภัยครับ ทีมงานกำลังตรวจสอบให้ครับ",
-  extracted: { product: "platform", issue_types: ["access_problem"], sentiment: "negative", language: "th" },
+  extracted: { product: "platform", product_detail: "Web App", issue_types: ["access_problem"], sentiment: "negative", language: "th" },
 };
 
 describe("agent loop", () => {

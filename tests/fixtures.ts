@@ -22,7 +22,7 @@ export function makeResult(overrides: Partial<TriageResult> = {}): TriageResult 
   return {
     ticket_id: "TEST",
     urgency: "low",
-    extracted: { product: "appearance", issue_types: ["how_to"], sentiment: "neutral", language: "en" },
+    extracted: { product: "appearance", product_detail: "Theme settings", issue_types: ["how_to"], sentiment: "neutral", language: "en" },
     decision: "auto_respond",
     route_team: null,
     follow_up_teams: [],

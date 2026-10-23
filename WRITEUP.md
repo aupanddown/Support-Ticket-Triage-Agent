@@ -16,12 +16,12 @@
 | Over-escalation | Rules ignore the ticket's wording; tests include harmless tickets worded like problems ("No one can tell me how to export...") |
 | Invented KB articles | Only IDs the KB tool really returned are kept |
 | OpenAI outage or slow response | Timeout, retries with backoff, then fail-safe escalation with the reason; a rejected key or model stops the CLI with a clear error |
-| Prompt injection | Ticket sent as escaped JSON in `<ticket>` tags, treated as data; read-only tools; the policy overrides a fooled model |
+| Prompt injection or a mislabeled ticket | Ticket sent as escaped JSON in `<ticket>` tags, treated as data; read-only tools; refund promises are replaced, and tool evidence (an unresolved payment, an Enterprise incident) blocks automatic replies whatever the labels say |
 | Cost and latency | Small default model, input limits; next: queue, prompt caching, Batch API |
 
 ## 3. How to evaluate in production
 
-- **Golden set regression** (`npm run eval`): urgency, decision, teams, issue types, language, KB use, key facts in the note and a reply rubric, with `--runs N` to expose unstable checks. Snapshot on the sample tickets (`gpt-5.4-mini`, 2026-10-23, 3 runs): 65/69; T1 and T2 passed everything, T3 is borderline (urgency `medium`, a browser step for a desktop user, each in 2 of 3 runs). Policy invariants are reported apart from the score, since they hold by construction. In production the set grows with real tickets.
+- **Golden set regression** (`npm run eval`): urgency, decision, teams, issue types, language, KB use, key facts in the note and a reply rubric, with `--runs N` to expose unstable checks. Snapshot on the sample tickets (`gpt-5.4-mini`, 2026-10-23, 3 runs): 65/69, every miss in a single check of one run except T3 urgency (`medium` instead of `low` in 2 of 3 runs); the rubric caught a T1 reply saying "pending" and a T2 reply mentioning the status page once each. Policy invariants are reported apart from the score, since they hold by construction. In production the set grows with real tickets.
 - **Human override rate:** how often agents change the urgency, team or decision, or rewrite the draft.
 - **Escalation precision and recall**, time to first response and CSAT versus manual handling.
 - **Sampled review** of auto-responses, weighted toward low confidence.

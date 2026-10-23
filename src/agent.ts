@@ -122,7 +122,7 @@ export function failSafeResult(ticket: Ticket, reason: string, facts: PolicyFact
   const result: TriageResult = {
     ticket_id: ticket.id,
     urgency: "high",
-    extracted: { product: "other", issue_types: ["other"], sentiment: "neutral", language },
+    extracted: { product: "other", product_detail: "unknown", issue_types: ["other"], sentiment: "neutral", language },
     decision: "escalate_to_human",
     route_team: "Support",
     follow_up_teams: [],

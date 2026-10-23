@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { detectScript } from "./language.js";
-import { promisesRefund } from "./policy.js";
+import { AUTO_RESPOND_MIN_CONFIDENCE, promisesRefund } from "./policy.js";
 import { Decision, IssueType, RouteTeam, Ticket, type TriageResult, Urgency } from "./schemas.js";
 
 // ---------- Golden set format (data/golden.json) ----------
@@ -93,7 +93,9 @@ export function policyViolations(ticket: Ticket, result: TriageResult): string[]
   if (result.decision === "auto_respond") {
     if (result.urgency === "high" || result.urgency === "critical") violations.push(`auto_respond at ${result.urgency} urgency`);
     if (result.kb_articles_used.length === 0) violations.push("auto_respond without a KB article");
-    if (result.confidence < 0.7) violations.push("auto_respond with confidence below 0.7");
+    if (result.confidence < AUTO_RESPOND_MIN_CONFIDENCE) {
+      violations.push(`auto_respond with confidence below ${AUTO_RESPOND_MIN_CONFIDENCE}`);
+    }
   }
   if (result.urgency === "critical" && result.decision !== "escalate_to_human") violations.push("critical not escalated");
   if (result.decision !== "auto_respond" && result.route_team === null) violations.push("needs a person but has no team");
