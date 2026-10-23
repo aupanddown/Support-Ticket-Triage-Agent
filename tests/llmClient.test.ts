@@ -1,7 +1,8 @@
+import OpenAI from "openai";
 import type { ChatCompletion } from "openai/resources/chat/completions";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
-import { createOpenAiLlmClient, fromOpenAiCompletion, toOpenAiMessage } from "../src/llm/client.js";
+import { createOpenAiLlmClient, fromOpenAiCompletion, isConfigError, toOpenAiMessage } from "../src/llm/client.js";
 
 /** Builds a minimal ChatCompletion with one choice. */
 function completion(message: Record<string, unknown>): ChatCompletion {
@@ -50,6 +51,22 @@ describe("OpenAI mapping", () => {
   it("throws on a refusal or an empty message (the agent turns this into a fail-safe)", () => {
     expect(() => fromOpenAiCompletion(completion({ content: null, refusal: "I can't help" }))).toThrow(/refused/);
     expect(() => fromOpenAiCompletion(completion({ content: null }))).toThrow(/neither/);
+  });
+
+  it("treats errors that no retry can fix as configuration errors", () => {
+    // generate() builds the same subclass the SDK throws for that status (AuthenticationError for 401, ...).
+    const apiError = (status: number, body: Record<string, unknown> = {}) =>
+      OpenAI.APIError.generate(status, { error: body }, "error", new Headers());
+
+    expect(isConfigError(apiError(401))).toBe(true);
+    expect(isConfigError(apiError(404))).toBe(true);
+    expect(isConfigError(apiError(429, { code: "insufficient_quota" }))).toBe(true);
+    expect(isConfigError(apiError(400, { param: "response_format" }))).toBe(true);
+
+    // Temporary or ticket-specific problems are not: the agent falls back to a per-ticket escalation.
+    expect(isConfigError(apiError(429, { code: "rate_limit_exceeded" }))).toBe(false);
+    expect(isConfigError(apiError(400, { param: "messages" }))).toBe(false);
+    expect(isConfigError(new Error("Request timed out."))).toBe(false);
   });
 
   it("explains a missing API key", () => {

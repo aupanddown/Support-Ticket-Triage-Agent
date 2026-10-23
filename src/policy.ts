@@ -9,20 +9,20 @@ import type { IssueType, RouteTeam, Ticket, TriageResult, Urgency } from "./sche
  * hand the ticket to a human, add a team, or replace an unsafe reply. None of them can undo an
  * escalation. All functions here are pure: no I/O, no mutation of the input.
  *
- * Signals, strongest first:
- * 1. the model's structured classification (`issue_types`), which can only ADD escalations,
- *    so a fooled model cannot use it to avoid one;
- * 2. facts from tool results, counted only when the ticket is about that topic;
- * 3. a short list of explicit phrases, as a backup in case the model misses the obvious.
+ * Rules rely on structured evidence: the model's classification (`issue_types`), which can only
+ * ADD escalations, so a fooled model cannot use it to avoid one; and facts from tool results.
+ * The only text matching is a short list of unambiguous money phrases in the ticket, and checks
+ * of the reply itself (refund promises, money talk in an automatic reply).
  */
 
-/** Evidence from tool results (see `Tool.facts`). Every field is optional: a tool may not have been called. */
+/**
+ * Evidence from tool results (see `Tool.facts`). Every field is optional: a tool may not have been
+ * called. To add a fact, add a field here and use it in a rule; list fields are merged automatically.
+ */
 export interface PolicyFacts {
   /** get_customer_history */
   customerPlan?: string;
   customerRegion?: string;
-  /** get_billing_transactions: a failed activation, or the same thing charged more than once. */
-  billingProblem?: boolean;
   /** check_service_status: regions with a component that is not operational. */
   degradedRegions?: string[];
   /** search_knowledge_base: IDs of the articles actually returned. */
@@ -39,48 +39,29 @@ export interface Rule {
   apply(result: TriageResult, ctx: PolicyContext): TriageResult;
 }
 
-// ---------- Backup phrase lists (English and Thai) ----------
+// ---------- Text checks ----------
 
-// A money matter only a human may decide: refund requests, disputes, duplicate, failed or
-// unauthorized charges. "What is your refund policy?" is not one.
-const MONEY_RISK_TEXT = new RegExp(
+// Unambiguous money disputes, in case the model misses them. Deliberately narrow: questions such as
+// "what is your refund policy?" or "what happens if a payment fails?" are left to the model.
+const MONEY_DISPUTE_TEXT = new RegExp(
   [
     String.raw`\b(refund me|money back|chargebacks?)\b`,
-    String.raw`\b(want|need|get|request|requesting|asking for|issue|give me|process)\s+(me\s+)?(a\s+|my\s+)?(full\s+)?refund`,
-    String.raw`\bdisput\w*\b.{0,40}\b(bank|card|charges?|payments?|transactions?)\b`,
-    String.raw`\b(charged|billed)\s+(me\s+)?(twice|again|two times|three times|multiple times|\d+ times)\b`,
+    String.raw`\bdisput\w*\b.{0,40}\b(with|at)\s+(my|the|our)\s+bank\b`,
     String.raw`\b(double|duplicate)[- ]charg\w*`,
-    String.raw`\b(double|duplicate|unauthori[sz]ed)\s+(payments?|transactions?)\b`,
-    String.raw`\b(see|have|got|there are|now)\s+(double|multiple|two|three|\d+)\s+(pending\s+)?charges\b`,
-    String.raw`\breverse\s+(the\s+|this\s+|these\s+|my\s+|all\s+)?(charges?|payments?|transactions?)\b`,
-    String.raw`\bcharges?\s+(\w+\s+){0,2}reversed\b`,
-    String.raw`\b(payments?\s+(failed|declined|did not go through|didn't go through)|failed payments?)\b`,
-    "ขอคืนเงิน|ขอเงินคืน|คืนเงินให้|ตัดเงินซ้ำ|หักเงินซ้ำ|เรียกเก็บซ้ำ|จ่ายเงินไม่ผ่าน|ชำระเงินไม่สำเร็จ",
-    "(โดน|ถูก)(ตัด|หัก)เงิน.{0,10}(ครั้ง|รอบ|ซ้ำ)",
-  ].join("|"),
-  "i",
-);
-
-// The product is down for many people. One user who cannot log in, or one error on one file, is not an outage.
-const OUTAGE_TEXT = new RegExp(
-  [
-    String.raw`\b(outage|(app|site|system|service|platform|website)\s+(is|went)\s+down)\b`,
-    String.raw`\b(error|5\d\d|down|can'?t|cannot|unable|not working)\b.{0,40}\bfor\s+(everyone|all\s+(of\s+)?(our|my)\s+users|the\s+whole\s+team|our\s+whole\s+team)\b`,
-    String.raw`\b(nobody|no one)\b.{0,30}\bcan\b`,
-    String.raw`\b(coworkers|colleagues|everyone|whole team|all (of )?(our|my) users)\b.{0,30}\b(can'?t|cannot|unable to)\b`,
-    "ระบบล่ม|ระบบเข้าไม่ได้|ระบบใช้งานไม่ได้|(เพื่อนร่วมงาน|ทุกคน).{0,15}(เข้าไม่ได้|ใช้งานไม่ได้|ใช้ไม่ได้)",
+    "ขอคืนเงิน|ขอเงินคืน|ตัดเงินซ้ำ|หักเงินซ้ำ|เรียกเก็บซ้ำ",
   ].join("|"),
   "i",
 );
 
 const ENTERPRISE = /\benterprise\b/i;
 
-// Phrases that promise or confirm a refund, credit or compensation. Only a human in Billing may decide that.
+// Replies that promise or confirm a refund, credit or compensation. Only a human in Billing may decide that.
+// "I will pass your refund request to Billing" is not a promise.
 const REFUND_PROMISE_PATTERNS: readonly RegExp[] = [
-  /\b(we|i)('ll|'re|'ve| will| are| have| am| am going to| are going to)\s+(\w+\s+){0,5}(refund\w*|revers\w*|reimburs\w*)/i,
+  /\b(we|i)('ll|'re|'ve| will| are| have| am| am going to| are going to)\s+(\w+\s+){0,5}(refund|reimburse|reverse)(d|ing)?\b(?!\s+(request|policy|process|team|department))/i,
   /\b(we|i)('ll|'re| will| are| am)\s+(\w+\s+){0,3}(issu\w*|giv\w*|add\w*|appl\w*)\s+(you\s+|your account\s+)?(a\s+|an\s+)?(full\s+|partial\s+)?(refund|credit|discount)\b/i,
   /\bcredit\w*\s+(to\s+)?(your|the)\s+account\b/i,
-  /\b(team|billing)\s+will\s+(\w+\s+){0,2}(refund|reverse|reimburse)/i,
+  /\b(team|billing)\s+will\s+(\w+\s+){0,2}(refund|reimburse|reverse)\b(?!\s+(request|policy|process))/i,
   /\b(refunds?|reversals?|reimbursements?)\s+(has|have|will|is|are)\s+(been\s+)?(be\s+)?(issued|processed|approved|initiated|sent)/i,
   /\b(will|shall)\s+be\s+(fully\s+)?(refunded|reversed|reimbursed|credited|returned)\b/i,
   /\b(has|have)\s+been\s+(fully\s+)?(refunded|reversed|reimbursed|credited)\b/i,
@@ -97,34 +78,29 @@ const MONEY_IN_REPLY =
   /\b(refund\w*|reimburs\w*|compensat\w*|chargebacks?|money back|credit(?!\s*card)\w*)\b|คืนเงิน|ชดเชย|(?<!บัตร)เครดิต/i;
 
 /**
- * Normalizes quotes before matching: models often write typographic quotes ("We’ll") instead of "We'll".
+ * Normalizes quotes before matching: models often write typographic quotes instead of "We'll".
  * (Not NFKC: it would split the Thai vowel "ำ" into two characters and break the Thai patterns.)
  */
-function normalize(text: string): string {
+export function normalizeQuotes(text: string): string {
   return text.replace(/[‘’ʼ`´]/g, "'").replace(/[“”]/g, '"');
 }
 
 function customerText(ticket: Ticket): string {
-  return normalize(ticket.messages.map((m) => m.text).join("\n"));
+  return normalizeQuotes(ticket.messages.map((m) => m.text).join("\n"));
 }
 
-/** Backup signal: the ticket text raises a money matter that only a human in Billing may decide. */
-export function mentionsMoneyRisk(ticket: Ticket): boolean {
-  return MONEY_RISK_TEXT.test(customerText(ticket));
-}
-
-/** Backup signal: the ticket text describes an outage rather than a single user's problem. */
-export function mentionsOutage(ticket: Ticket): boolean {
-  return OUTAGE_TEXT.test(customerText(ticket));
+/** Backup signal: the ticket text states a money dispute that only a human in Billing may decide. */
+export function mentionsMoneyDispute(ticket: Ticket): boolean {
+  return MONEY_DISPUTE_TEXT.test(customerText(ticket));
 }
 
 export function promisesRefund(reply: string): boolean {
-  const text = normalize(reply);
+  const text = normalizeQuotes(reply);
   return REFUND_PROMISE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 export function mentionsMoneyInReply(reply: string): boolean {
-  return MONEY_IN_REPLY.test(normalize(reply));
+  return MONEY_IN_REPLY.test(normalizeQuotes(reply));
 }
 
 // ---------- Safe fallback replies (never promise refunds or compensation) ----------
@@ -202,13 +178,9 @@ export const RULES: readonly Rule[] = [
   },
   {
     // Rule 1: refunds, disputes, duplicate or failed charges always go to a human in Billing.
-    // A billing problem on the account counts only when the ticket is about billing.
     id: "R1_money_to_billing",
-    apply: (result, { ticket, facts }) => {
-      const aboutBilling = hasIssue(result, "billing_dispute", "billing_question");
-      const moneyRisk =
-        hasIssue(result, "billing_dispute") || mentionsMoneyRisk(ticket) || (aboutBilling && facts.billingProblem === true);
-      if (!moneyRisk) return result;
+    apply: (result, { ticket }) => {
+      if (!hasIssue(result, "billing_dispute") && !mentionsMoneyDispute(ticket)) return result;
       return { ...escalate(result, "Billing"), urgency: atLeast(result.urgency, "high") };
     },
   },
@@ -230,18 +202,15 @@ export const RULES: readonly Rule[] = [
         : result,
   },
   {
-    // Rule 2: an Enterprise customer with an outage is a critical incident.
-    // A degraded region counts only when the ticket reports a problem, not for a how-to question.
+    // Rule 2: an Enterprise customer with an outage is a critical incident. A degraded component in
+    // the customer's region confirms an access problem or bug as an outage; a how-to stays a how-to.
     id: "R2_enterprise_outage",
     apply: (result, { ticket, facts }) => {
       // Enterprise if EITHER source says so, so a lookup can never make the outcome less safe.
       const isEnterprise = ENTERPRISE.test(ticket.customer.info) || ENTERPRISE.test(facts.customerPlan ?? "");
       const regionDegraded =
         facts.customerRegion !== undefined && (facts.degradedRegions ?? []).includes(facts.customerRegion);
-      const isOutage =
-        hasIssue(result, "outage") ||
-        mentionsOutage(ticket) ||
-        (regionDegraded && hasIssue(result, "access_problem", "bug"));
+      const isOutage = hasIssue(result, "outage") || (regionDegraded && hasIssue(result, "access_problem", "bug"));
       if (!isEnterprise || !isOutage) return result;
       return { ...escalate(result, "Engineering_Incident"), urgency: "critical" };
     },
@@ -260,12 +229,12 @@ export const RULES: readonly Rule[] = [
   },
   {
     // Rule 4: auto-respond only for low/medium urgency backed by at least one KB article.
+    // A high urgency ticket goes to a person now; one without a KB answer goes to a specialist.
     id: "R4_auto_respond_requirements",
     apply: (result) => {
       if (result.decision !== "auto_respond") return result;
-      const urgencyOk = result.urgency === "low" || result.urgency === "medium";
-      const hasKb = result.kb_articles_used.length > 0;
-      if (urgencyOk && hasKb) return result;
+      if (result.urgency === "high" || result.urgency === "critical") return escalate(result);
+      if (result.kb_articles_used.length > 0) return result;
       return { ...result, decision: "route_to_specialist", route_team: result.route_team ?? "Support" };
     },
   },

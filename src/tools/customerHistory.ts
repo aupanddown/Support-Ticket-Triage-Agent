@@ -2,8 +2,6 @@ import { z } from "zod";
 import customers from "../../data/customers.json" with { type: "json" };
 import { defineTool } from "./tool.js";
 
-type Customer = (typeof customers)[number];
-
 export const customerHistoryTool = defineTool({
   name: "get_customer_history",
   description:
@@ -18,8 +16,5 @@ export const customerHistoryTool = defineTool({
     if (!customer) throw new Error(`No customer found with id "${customer_id}"`);
     return customer;
   },
-  facts: (data) => {
-    const { plan, region } = data as Customer;
-    return { customerPlan: plan, customerRegion: region };
-  },
+  facts: ({ plan, region }) => ({ customerPlan: plan, customerRegion: region }),
 });

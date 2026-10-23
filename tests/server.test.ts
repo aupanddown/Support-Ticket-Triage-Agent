@@ -57,6 +57,6 @@ describe("POST /triage", () => {
     const res = await app.inject({ method: "POST", url: "/triage", payload: sampleTicket("T2") });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ decision: "escalate_to_human", route_team: "Engineering_Incident" });
+    expect(res.json()).toMatchObject({ decision: "escalate_to_human", route_team: "Support", confidence: 0 });
   });
 });

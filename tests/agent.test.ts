@@ -18,6 +18,18 @@ const T3_OUTPUT: LlmTriageOutput = {
   confidence: 0.9,
 };
 
+/** A modest model answer for T2, before the policy: high urgency, routed to Support, Thai reply. */
+const T2_LIKE_OUTPUT: LlmTriageOutput = {
+  ...T3_OUTPUT,
+  urgency: "high",
+  decision: "route_to_specialist",
+  route_team: "Support",
+  follow_up_teams: [],
+  kb_articles_used: [],
+  customer_reply_draft: "ขออภัยครับ ทีมงานกำลังตรวจสอบให้ครับ",
+  extracted: { product: "platform", issue_types: ["access_problem"], sentiment: "negative", language: "th" },
+};
+
 describe("agent loop", () => {
   it("runs the requested tools, sends results back, and returns a validated result", async () => {
     const llm = new FakeLlmClient([
@@ -49,6 +61,15 @@ describe("agent loop", () => {
     const kbReply = JSON.parse(toolMessages[1]!.content);
     expect(kbReply.ok).toBe(true);
     expect(kbReply.data[0].id).toBe("KB-101");
+  });
+
+  it("tidies the reply: plain quotes and no internal team IDs", async () => {
+    const reply = "I’m sorry. Our Engineering_Incident team is looking into it.";
+    const llm = new FakeLlmClient([finalAnswer({ ...T2_LIKE_OUTPUT, customer_reply_draft: reply, extracted: { ...T2_LIKE_OUTPUT.extracted, language: "en" } })]);
+
+    const result = await triageTicket(sampleTicket("T3"), { llm });
+
+    expect(result.customer_reply_draft).toBe("I'm sorry. Our engineering team is looking into it.");
   });
 
   it("reports each tool call through onEvent", async () => {
@@ -92,15 +113,7 @@ describe("agent loop", () => {
     const ticket = { ...sampleTicket("T2"), customer: { id: "C-2001", info: "Customer in Thailand" } };
     const llm = new FakeLlmClient([
       toolCalls({ name: "get_customer_history", args: { customer_id: "C-2001" } }),
-      finalAnswer({
-        ...T3_OUTPUT,
-        urgency: "high",
-        decision: "route_to_specialist",
-        route_team: "Support",
-        kb_articles_used: [],
-        customer_reply_draft: "ขออภัยครับ ทีมงานกำลังตรวจสอบให้ครับ",
-        extracted: { ...T3_OUTPUT.extracted, language: "th" },
-      }),
+      finalAnswer({ ...T2_LIKE_OUTPUT, extracted: { ...T2_LIKE_OUTPUT.extracted, issue_types: ["outage"] } }),
     ]);
 
     const result = await triageTicket(ticket, { llm });
@@ -108,18 +121,25 @@ describe("agent loop", () => {
     expect(result).toMatchObject({ urgency: "critical", route_team: "Engineering_Incident" });
   });
 
-  it("cannot be made less safe by looking up another customer", async () => {
+  it("confirms an access problem as an outage when the customer's region is degraded", async () => {
+    const llm = new FakeLlmClient([
+      toolCalls(
+        { name: "get_customer_history", args: { customer_id: "C-2001" } },
+        { name: "check_service_status", args: { region: "asia" } },
+      ),
+      finalAnswer({ ...T2_LIKE_OUTPUT, extracted: { ...T2_LIKE_OUTPUT.extracted, issue_types: ["access_problem"] } }),
+    ]);
+
+    const result = await triageTicket(sampleTicket("T2"), { llm });
+
+    expect(result).toMatchObject({ urgency: "critical", route_team: "Engineering_Incident" });
+  });
+
+  it("cannot read another customer, and the refused lookup changes nothing", async () => {
     // A fooled model looks up a Pro customer for the Enterprise outage ticket T2.
     const llm = new FakeLlmClient([
       toolCalls({ name: "get_customer_history", args: { customer_id: "C-3001" } }),
-      finalAnswer({
-        ...T3_OUTPUT,
-        decision: "route_to_specialist",
-        route_team: "Support",
-        kb_articles_used: [],
-        customer_reply_draft: "ขออภัยครับ กำลังตรวจสอบให้ครับ",
-        extracted: { ...T3_OUTPUT.extracted, issue_types: ["access_problem"], language: "th" },
-      }),
+      finalAnswer({ ...T2_LIKE_OUTPUT, extracted: { ...T2_LIKE_OUTPUT.extracted, issue_types: ["outage"] } }),
     ]);
 
     const result = await triageTicket(sampleTicket("T2"), { llm });
@@ -127,23 +147,6 @@ describe("agent loop", () => {
     const toolReply = JSON.parse(llm.requests[1]!.messages.at(-1)!.content!);
     expect(toolReply).toEqual({ ok: false, error: "Only the ticket's customer (C-2001) can be looked up" });
     expect(result).toMatchObject({ urgency: "critical", route_team: "Engineering_Incident" });
-  });
-
-  it("uses a billing problem on the account as evidence when the ticket is about billing", async () => {
-    // T1's billing data shows a failed activation; the model only calls it a billing question.
-    const ticket = { ...sampleTicket("T1"), messages: [{ sent: "now", text: "Why is my account still on Free?" }] };
-    const answer = (issue_types: LlmTriageOutput["extracted"]["issue_types"]) =>
-      new FakeLlmClient([
-        toolCalls({ name: "get_billing_transactions", args: { customer_id: "C-1001" } }),
-        finalAnswer({ ...T3_OUTPUT, extracted: { ...T3_OUTPUT.extracted, issue_types }, follow_up_teams: [] }),
-      ]);
-
-    const aboutBilling = await triageTicket(ticket, { llm: answer(["billing_question"]) });
-    expect(aboutBilling).toMatchObject({ decision: "escalate_to_human", route_team: "Billing" });
-
-    // The same account fact does not escalate a ticket that is not about billing.
-    const howTo = await triageTicket(ticket, { llm: answer(["how_to"]) });
-    expect(howTo.route_team).not.toBe("Billing");
   });
 
   it("feeds tool errors back to the model so it can recover", async () => {
@@ -211,8 +214,9 @@ describe("fail safe: always escalate to a human, never throw", () => {
     const t1 = await triageTicket(sampleTicket("T1"), { llm: new FakeLlmClient([new Error("API down")]) });
     expect(t1).toMatchObject({ route_team: "Billing", urgency: "high" });
 
+    // Without the model's classification there is no outage evidence: a person triages T2, in Thai.
     const t2 = await triageTicket(sampleTicket("T2"), { llm: new FakeLlmClient([new Error("API down")]) });
-    expect(t2).toMatchObject({ route_team: "Engineering_Incident", urgency: "critical" });
+    expect(t2).toMatchObject({ decision: "escalate_to_human", route_team: "Support", urgency: "high" });
     expect(t2.extracted.language).toBe("th");
   });
 });

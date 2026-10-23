@@ -3,7 +3,6 @@ import customers from "../data/customers.json" with { type: "json" };
 import tickets from "../data/tickets.json" with { type: "json" };
 import { Ticket } from "../src/schemas.js";
 import { executeTool, getToolSpecs, TOOLS, type ToolResult } from "../src/tools/index.js";
-import { billingTool } from "../src/tools/billing.js";
 import { customerHistoryTool } from "../src/tools/customerHistory.js";
 import { knowledgeBaseTool, scoreArticle, tokenize } from "../src/tools/knowledgeBase.js";
 import { serviceStatusTool } from "../src/tools/serviceStatus.js";
@@ -121,11 +120,6 @@ describe("tool facts (evidence for the policy)", () => {
       customerPlan: "Enterprise",
       customerRegion: "asia",
     });
-  });
-
-  it("billing flags T1's failed activation and repeated charges, but not a normal account", async () => {
-    expect(await factsOf(billingTool, { customer_id: "C-1001" })).toEqual({ billingProblem: true });
-    expect(await factsOf(billingTool, { customer_id: "C-3001" })).toEqual({ billingProblem: false });
   });
 
   it("service status lists the degraded regions", async () => {

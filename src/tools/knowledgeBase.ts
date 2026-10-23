@@ -69,7 +69,7 @@ export const knowledgeBaseTool = defineTool({
     return inProduct.length > 0 ? inProduct : search(query, articles);
   },
   // Remembers which articles were really retrieved, so the policy can drop invented IDs.
-  facts: (data) => ({ retrievedKbIds: (data as Array<{ id: string }>).map((a) => a.id) }),
+  facts: (results) => ({ retrievedKbIds: results.map((article) => article.id) }),
 });
 
 /** Best matches first; articles that match no query term are left out. */

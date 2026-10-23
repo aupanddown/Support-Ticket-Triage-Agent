@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { type ChatMessage, type LlmClient, LlmConfigError } from "./llm/client.js";
-import { applyPolicy, type PolicyFacts, safeReply, safeReplyLanguage } from "./policy.js";
+import { applyPolicy, normalizeQuotes, type PolicyFacts, safeReply, safeReplyLanguage } from "./policy.js";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompts/system.js";
 import { LlmTriageOutput, type Ticket, TriageResult } from "./schemas.js";
 import { executeTool, getToolSpecs, TOOLS, type ToolCall, type ToolResult } from "./tools/index.js";
@@ -54,7 +54,8 @@ export async function triageTicket(ticket: Ticket, options: AgentOptions): Promi
 
       if (response.type === "final") {
         const output = parseLlmOutput(response.content);
-        const result: TriageResult = { ticket_id: ticket.id, ...output, guardrails_applied: [] };
+        const reply = tidyReply(output.customer_reply_draft);
+        const result: TriageResult = { ticket_id: ticket.id, ...output, customer_reply_draft: reply, guardrails_applied: [] };
         return finalize(result, ticket, facts);
       }
 
@@ -95,13 +96,20 @@ function finalize(result: TriageResult, ticket: Ticket, facts: PolicyFacts): Tri
 
 /** Combines facts from several tool calls: lists are merged, other values are replaced by the latest. */
 function mergeFacts(current: PolicyFacts, next: PolicyFacts): PolicyFacts {
-  const union = (a?: string[], b?: string[]) => (a || b ? [...new Set([...(a ?? []), ...(b ?? [])])] : undefined);
-  return {
-    ...current,
-    ...next,
-    degradedRegions: union(current.degradedRegions, next.degradedRegions),
-    retrievedKbIds: union(current.retrievedKbIds, next.retrievedKbIds),
-  };
+  const merged: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(next)) {
+    const previous = merged[key];
+    merged[key] = Array.isArray(previous) && Array.isArray(value) ? [...new Set([...previous, ...value])] : value;
+  }
+  return merged as PolicyFacts;
+}
+
+/**
+ * Formatting only, before the policy: plain quotes, which display the same in every client
+ * (email, SMS, apps), and no internal team ID in front of the customer.
+ */
+function tidyReply(reply: string): string {
+  return normalizeQuotes(reply).replace(/\bEngineering_Incident(\s+team)?\b/g, "engineering team");
 }
 
 /**

@@ -69,18 +69,33 @@ export class OpenAiLlmClient implements LlmClient {
       });
       return fromOpenAiCompletion(completion);
     } catch (error) {
-      if (
-        error instanceof OpenAI.AuthenticationError ||
-        error instanceof OpenAI.PermissionDeniedError ||
-        error instanceof OpenAI.NotFoundError
-      ) {
+      if (isConfigError(error)) {
         throw new LlmConfigError(
-          `OpenAI rejected the request: ${error.message.replace(/\.+$/, "")}. Check OPENAI_API_KEY and OPENAI_MODEL ("${this.model}").`,
+          `OpenAI rejected the request: ${error.message.replace(/\.+$/, "")}. Check OPENAI_API_KEY, the account's credits and OPENAI_MODEL ("${this.model}").`,
         );
       }
       throw error;
     }
   }
+}
+
+/**
+ * Errors that neither a retry nor the next ticket can fix: the key, permissions, model, quota,
+ * or a model that does not support tools together with structured output.
+ */
+export function isConfigError(error: unknown): error is InstanceType<typeof OpenAI.APIError> {
+  if (
+    error instanceof OpenAI.AuthenticationError ||
+    error instanceof OpenAI.PermissionDeniedError ||
+    error instanceof OpenAI.NotFoundError
+  ) {
+    return true;
+  }
+  if (error instanceof OpenAI.RateLimitError) return error.code === "insufficient_quota";
+  if (error instanceof OpenAI.BadRequestError) {
+    return ["model", "response_format", "tools", "tool_choice"].includes(error.param ?? "");
+  }
+  return false;
 }
 
 /** Creates the real client. Fails with a clear message if no API key is configured. */
