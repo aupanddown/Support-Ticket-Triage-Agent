@@ -30,7 +30,7 @@
         "activat"
       ],
       "reply_must_not_match": [
-        "\\bpending\\b",
+        "(?<!duplicate or )\\bpending\\b",
         "drop off",
         "(do not|don't)\\s+(open|file|start|raise)\\s+(a\\s+)?(bank\\s+)?(dispute|chargeback)"
       ]

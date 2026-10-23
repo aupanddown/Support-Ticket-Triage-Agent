@@ -126,7 +126,7 @@ src/
   cli.ts                 the npm run triage command
 data/                    sample tickets and mock data (customers, billing, status, knowledge base)
 tests/                   offline tests
-WRITEUP.md               architecture, risks and evaluation (one page)
+WRITEUP.md               architecture, risks and evaluation
 ```
 
 **Adding a tool:** create a file in `src/tools/` with `defineTool({ name, description, args, handler })` and add it to `TOOLS` in `src/tools/index.ts`. The JSON Schema for the model is generated from the zod `args`.
