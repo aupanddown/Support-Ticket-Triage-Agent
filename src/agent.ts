@@ -113,9 +113,9 @@ function tidyReply(reply: string): string {
 }
 
 /**
- * When automation fails, a human takes over. Urgency starts at "high" so the ticket is looked at soon;
- * the policy still runs with the facts gathered so far, so e.g. a billing ticket goes to Billing and
- * an Enterprise outage becomes critical.
+ * When automation fails, a human takes over: escalate_to_human to Support, urgency "high" so the
+ * ticket is looked at soon, and a safe reply in the customer's language. There is no classification,
+ * so the person triaging decides the right team.
  */
 export function failSafeResult(ticket: Ticket, reason: string, facts: PolicyFacts = {}): TriageResult {
   const language = safeReplyLanguage(ticket);

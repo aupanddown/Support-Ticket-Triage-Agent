@@ -210,11 +210,11 @@ describe("fail safe: always escalate to a human, never throw", () => {
     expect(events).toEqual([{ type: "fail_safe", reason: "OpenAI rejected the request (401)", configError: true }]);
   });
 
-  it("still applies the policy to the fail-safe result", async () => {
+  it("hands a failed ticket to a person in Support, with a reply in the customer's language", async () => {
+    // Without the model's classification there is nothing to route on: a person triages it.
     const t1 = await triageTicket(sampleTicket("T1"), { llm: new FakeLlmClient([new Error("API down")]) });
-    expect(t1).toMatchObject({ route_team: "Billing", urgency: "high" });
+    expect(t1).toMatchObject({ decision: "escalate_to_human", route_team: "Support", urgency: "high" });
 
-    // Without the model's classification there is no outage evidence: a person triages T2, in Thai.
     const t2 = await triageTicket(sampleTicket("T2"), { llm: new FakeLlmClient([new Error("API down")]) });
     expect(t2).toMatchObject({ decision: "escalate_to_human", route_team: "Support", urgency: "high" });
     expect(t2.extracted.language).toBe("th");

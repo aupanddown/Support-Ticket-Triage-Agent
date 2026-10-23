@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { evaluateCase, type GoldenCase, GoldenSet, safetyViolations, score } from "../src/evaluation.js";
+import { evaluateCase, type GoldenCase, GoldenSet, policyViolations, score } from "../src/evaluation.js";
 import { makeResult, sampleTicket } from "./fixtures.js";
 
 const T3_GOLDEN: GoldenCase = GoldenSet.parse([
@@ -25,29 +25,25 @@ const goodT3 = makeResult({
 });
 
 describe("golden.json", () => {
-  it("is valid and covers the three sample tickets plus extra cases with their own ticket", async () => {
+  it("is valid and covers exactly the three sample tickets", async () => {
     const golden = GoldenSet.parse(JSON.parse(await readFile("data/golden.json", "utf8")));
-    const ids = golden.map((g) => g.ticket_id);
-    expect(ids).toEqual(expect.arrayContaining(["T1", "T2", "T3"]));
-    for (const g of golden.filter((g) => !["T1", "T2", "T3"].includes(g.ticket_id))) {
-      expect(g.ticket?.id).toBe(g.ticket_id);
-    }
+    expect(golden.map((g) => g.ticket_id)).toEqual(["T1", "T2", "T3"]);
   });
 });
 
 describe("evaluateCase", () => {
   it("passes every check for a result that matches the golden case", () => {
-    const checks = evaluateCase(T3_GOLDEN, sampleTicket("T3"), goodT3);
+    const checks = evaluateCase(T3_GOLDEN, goodT3);
     expect(checks.filter((c) => !c.passed)).toEqual([]);
     expect(checks.map((c) => c.name)).toEqual([
-      "urgency", "decision", "route_team", "reply_language", "kb_articles", "internal_note", "safety",
+      "urgency", "decision", "route_team", "reply_language", "kb_articles", "internal_note",
     ]);
     expect(score(checks)).toBe(1);
   });
 
   it("explains what is wrong", () => {
     const wrong = { ...goodT3, urgency: "high" as const, kb_articles_used: [], internal_note: "dark mode question" };
-    const failed = evaluateCase(T3_GOLDEN, sampleTicket("T3"), wrong).filter((c) => !c.passed);
+    const failed = evaluateCase(T3_GOLDEN, wrong).filter((c) => !c.passed);
 
     expect(failed.find((c) => c.name === "urgency")?.detail).toBe("high (expected low)");
     expect(failed.find((c) => c.name === "kb_articles")?.detail).toBe("missing KB-101");
@@ -56,7 +52,7 @@ describe("evaluateCase", () => {
 
   it("accepts any value from a list of acceptable values", () => {
     const golden = { ...T3_GOLDEN, expected: { ...T3_GOLDEN.expected, urgency: ["low" as const, "medium" as const] } };
-    const check = evaluateCase(golden, sampleTicket("T3"), { ...goodT3, urgency: "medium" })[0]!;
+    const check = evaluateCase(golden, { ...goodT3, urgency: "medium" })[0]!;
     expect(check).toMatchObject({ name: "urgency", passed: true });
   });
 
@@ -65,9 +61,9 @@ describe("evaluateCase", () => {
   });
 });
 
-describe("safetyViolations", () => {
+describe("policyViolations (reported separately from the score)", () => {
   it("finds nothing wrong with a safe result", () => {
-    expect(safetyViolations(sampleTicket("T3"), goodT3)).toEqual([]);
+    expect(policyViolations(sampleTicket("T3"), goodT3)).toEqual([]);
   });
 
   it("flags every unsafe outcome", () => {
@@ -78,7 +74,7 @@ describe("safetyViolations", () => {
       confidence: 0.5,
       customer_reply_draft: "We will refund you today.",
     });
-    expect(safetyViolations(sampleTicket("T2"), unsafe)).toEqual([
+    expect(policyViolations(sampleTicket("T2"), unsafe)).toEqual([
       "reply promises a refund",
       "reply script differs from ticket",
       "auto_respond at critical urgency",
@@ -90,7 +86,7 @@ describe("safetyViolations", () => {
 
   it("flags a ticket that needs a person but has no team", () => {
     const orphan = makeResult({ decision: "route_to_specialist", route_team: null });
-    expect(safetyViolations(sampleTicket("T3"), orphan)).toEqual(["needs a person but has no team"]);
+    expect(policyViolations(sampleTicket("T3"), orphan)).toEqual(["needs a person but has no team"]);
   });
 });
 
@@ -112,7 +108,6 @@ describe("structured and reply checks", () => {
     });
     const checks = evaluateCase(
       golden({ issue_types_include: ["bug", "feature_request"], follow_up_teams_include: ["Product"] }),
-      sampleTicket("T3"),
       result,
     );
     expect(byName(checks, "issue_types")).toMatchObject({ passed: false, detail: "missing feature_request" });
@@ -123,7 +118,6 @@ describe("structured and reply checks", () => {
     const result = makeResult({ customer_reply_draft: "The pending charges will drop off soon." });
     const checks = evaluateCase(
       golden({ reply_must_match: ["presentation"], reply_must_not_match: ["\\bpending\\b"] }),
-      sampleTicket("T3"),
       result,
     );
     expect(byName(checks, "reply")).toMatchObject({

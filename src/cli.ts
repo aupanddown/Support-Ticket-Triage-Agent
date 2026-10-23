@@ -81,11 +81,20 @@ async function main(): Promise<void> {
       if (event.type === "fail_safe" && event.configError) configError = event.reason;
       else if (args.verbose || event.type === "fail_safe") logEvent(ticket.id, event);
     };
-    results.push(await triageTicket(ticket, { llm, onEvent }));
-    // A rejected key or model would fail every ticket the same way: stop instead of printing fake escalations.
-    if (configError) throw new Error(configError);
+    const result = await triageTicket(ticket, { llm, onEvent });
+    // A rejected key or model would fail every ticket the same way: stop instead of printing fake
+    // escalations, but keep the results of the tickets that were already triaged.
+    if (configError) {
+      if (results.length > 0) printResults(results);
+      throw new Error(configError);
+    }
+    results.push(result);
   }
 
+  printResults(results);
+}
+
+function printResults(results: TriageResult[]): void {
   console.log(JSON.stringify(results.length === 1 ? results[0] : results, null, 2));
 }
 

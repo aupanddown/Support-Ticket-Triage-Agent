@@ -11,8 +11,9 @@ import type { IssueType, RouteTeam, Ticket, TriageResult, Urgency } from "./sche
  *
  * Rules rely on structured evidence: the model's classification (`issue_types`), which can only
  * ADD escalations, so a fooled model cannot use it to avoid one; and facts from tool results.
- * The only text matching is a short list of unambiguous money phrases in the ticket, and checks
- * of the reply itself (refund promises, money talk in an automatic reply).
+ * The ticket text itself is never pattern-matched. Only the reply is checked, as a backstop for
+ * replies that may be SENT AUTOMATICALLY: an escalated ticket's reply is a draft that a person
+ * reads before sending.
  */
 
 /**
@@ -39,21 +40,11 @@ export interface Rule {
   apply(result: TriageResult, ctx: PolicyContext): TriageResult;
 }
 
-// ---------- Text checks ----------
+// ---------- Reply checks ----------
 
-// Unambiguous money disputes, in case the model misses them. Deliberately narrow: questions such as
-// "what is your refund policy?" or "what happens if a payment fails?" are left to the model.
-const MONEY_DISPUTE_TEXT = new RegExp(
-  [
-    String.raw`\b(refund me|money back|chargebacks?)\b`,
-    String.raw`\bdisput\w*\b.{0,40}\b(with|at)\s+(my|the|our)\s+bank\b`,
-    String.raw`\b(double|duplicate)[- ]charg\w*`,
-    "ขอคืนเงิน|ขอเงินคืน|ตัดเงินซ้ำ|หักเงินซ้ำ|เรียกเก็บซ้ำ",
-  ].join("|"),
-  "i",
-);
-
-const ENTERPRISE = /\benterprise\b/i;
+// The plan name at the start of the customer info ("Enterprise plan, Thailand region, ..."),
+// so a mention such as "evaluating an Enterprise upgrade" does not count.
+const ENTERPRISE_PLAN = /^\s*enterprise\b/i;
 
 // Replies that promise or confirm a refund, credit or compensation. Only a human in Billing may decide that.
 // "I will pass your refund request to Billing" is not a promise.
@@ -73,9 +64,10 @@ const REFUND_PROMISE_PATTERNS: readonly RegExp[] = [
 ];
 
 // Money words in a reply. An AUTOMATIC reply that talks about money is reviewed by a human,
-// even when no promise pattern matched ("credit card" / "บัตรเครดิต" is not counted).
+// even when no promise pattern matched. Broad on purpose: a false positive only adds a review.
+// ("credit card" / "บัตรเครดิต" is not counted.)
 const MONEY_IN_REPLY =
-  /\b(refund\w*|reimburs\w*|compensat\w*|chargebacks?|money back|credit(?!\s*card)\w*)\b|คืนเงิน|ชดเชย|(?<!บัตร)เครดิต/i;
+  /\b(refund\w*|reimburs\w*|compensat\w*|chargebacks?|money back|credit(?![- ]?card)\w*)\b|คืนเงิน|ชดเชย|(?<!บัตร)เครดิต/i;
 
 /**
  * Normalizes quotes before matching: models often write typographic quotes instead of "We'll".
@@ -87,11 +79,6 @@ export function normalizeQuotes(text: string): string {
 
 function customerText(ticket: Ticket): string {
   return normalizeQuotes(ticket.messages.map((m) => m.text).join("\n"));
-}
-
-/** Backup signal: the ticket text states a money dispute that only a human in Billing may decide. */
-export function mentionsMoneyDispute(ticket: Ticket): boolean {
-  return MONEY_DISPUTE_TEXT.test(customerText(ticket));
 }
 
 export function promisesRefund(reply: string): boolean {
@@ -149,19 +136,26 @@ function hasIssue(result: TriageResult, ...types: IssueType[]): boolean {
   return types.some((type) => result.extracted.issue_types.includes(type));
 }
 
+/** Adds a follow-up team, unless it already owns the ticket or is listed. */
 function addFollowUp(result: TriageResult, team: RouteTeam): TriageResult {
-  if (result.follow_up_teams.includes(team)) return result;
+  if (result.route_team === team || result.follow_up_teams.includes(team)) return result;
   return { ...result, follow_up_teams: [...result.follow_up_teams, team] };
 }
 
 /**
  * Hands the ticket to a human. A new owner team keeps the previous team as a follow-up,
  * so e.g. an outage ticket that also has a duplicate charge still reaches Billing.
+ * The owner is never also listed as a follow-up.
  */
 function escalate(result: TriageResult, team?: RouteTeam): TriageResult {
   const owner = team ?? result.route_team ?? "Support";
   const previous = result.route_team;
-  const escalated: TriageResult = { ...result, decision: "escalate_to_human", route_team: owner };
+  const escalated: TriageResult = {
+    ...result,
+    decision: "escalate_to_human",
+    route_team: owner,
+    follow_up_teams: result.follow_up_teams.filter((t) => t !== owner),
+  };
   return previous && previous !== owner ? addFollowUp(escalated, previous) : escalated;
 }
 
@@ -179,18 +173,22 @@ export const RULES: readonly Rule[] = [
   {
     // Rule 1: refunds, disputes, duplicate or failed charges always go to a human in Billing.
     id: "R1_money_to_billing",
-    apply: (result, { ticket }) => {
-      if (!hasIssue(result, "billing_dispute") && !mentionsMoneyDispute(ticket)) return result;
+    apply: (result) => {
+      if (!hasIssue(result, "billing_dispute")) return result;
       return { ...escalate(result, "Billing"), urgency: atLeast(result.urgency, "high") };
     },
   },
   {
     // Rule 1 (reply part): never promise a refund or compensation, whatever the ticket says.
+    // Billing decides on money, so it owns the ticket, unless an incident team already does
+    // (e.g. a service credit mentioned during an outage); then Billing follows up.
     id: "R1_no_refund_promise",
     apply: (result, { ticket }) => {
       if (!promisesRefund(result.customer_reply_draft)) return result;
-      const safe = { ...result, customer_reply_draft: safeReply(safeReplyLanguage(ticket), "billing") };
-      return escalate(safe, "Billing");
+      const owner = result.route_team === "Engineering_Incident" ? "Engineering_Incident" : "Billing";
+      const template = owner === "Billing" ? "billing" : "general";
+      const safe = { ...result, customer_reply_draft: safeReply(safeReplyLanguage(ticket), template) };
+      return { ...addFollowUp(escalate(safe, owner), "Billing"), urgency: atLeast(result.urgency, "high") };
     },
   },
   {
@@ -207,7 +205,7 @@ export const RULES: readonly Rule[] = [
     id: "R2_enterprise_outage",
     apply: (result, { ticket, facts }) => {
       // Enterprise if EITHER source says so, so a lookup can never make the outcome less safe.
-      const isEnterprise = ENTERPRISE.test(ticket.customer.info) || ENTERPRISE.test(facts.customerPlan ?? "");
+      const isEnterprise = ENTERPRISE_PLAN.test(ticket.customer.info) || facts.customerPlan === "Enterprise";
       const regionDegraded =
         facts.customerRegion !== undefined && (facts.degradedRegions ?? []).includes(facts.customerRegion);
       const isOutage = hasIssue(result, "outage") || (regionDegraded && hasIssue(result, "access_problem", "bug"));
@@ -261,15 +259,16 @@ export const RULES: readonly Rule[] = [
     },
   },
   {
-    // Every ticket that needs a person has an owner, and bug reports or feature requests on an
-    // automatically answered ticket still reach Product as a follow-up.
+    // Every ticket that needs a person has an owner. An automatically answered ticket has no owner:
+    // a team the model named becomes a follow-up, and bug reports or feature requests reach Product.
     id: "team_assigned",
     apply: (result) => {
-      if (result.decision !== "auto_respond" && result.route_team === null) return { ...result, route_team: "Support" };
-      if (result.decision === "auto_respond" && hasIssue(result, "bug", "feature_request")) {
-        return addFollowUp(result, "Product");
+      if (result.decision !== "auto_respond") {
+        return result.route_team === null ? { ...result, route_team: "Support" } : result;
       }
-      return result;
+      let followed = result.route_team ? addFollowUp({ ...result, route_team: null }, result.route_team) : result;
+      if (hasIssue(followed, "bug", "feature_request")) followed = addFollowUp(followed, "Product");
+      return followed;
     },
   },
 ];

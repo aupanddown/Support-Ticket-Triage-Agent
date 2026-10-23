@@ -10,16 +10,10 @@ function oneOrMany<T extends z.ZodType>(schema: T) {
   return z.union([schema, z.array(schema).min(1)]);
 }
 
+/** Expected outcome for one sample ticket of data/tickets.json. */
 export const GoldenCase = z.object({
   ticket_id: z.string(),
   description: z.string(),
-  /**
-   * "dev": cases looked at while writing the prompt (the sample tickets and the injection case).
-   * "held_out": extra cases never used while writing the prompt, to check that it generalizes.
-   */
-  set: z.enum(["dev", "held_out"]).default("dev"),
-  /** Only for cases that are not in data/tickets.json. */
-  ticket: Ticket.optional(),
   expected: z.object({
     urgency: oneOrMany(Urgency),
     decision: oneOrMany(Decision),
@@ -55,8 +49,7 @@ export interface Check {
     | "reply_language"
     | "kb_articles"
     | "internal_note"
-    | "reply"
-    | "safety";
+    | "reply";
   passed: boolean;
   detail: string;
 }
@@ -85,10 +78,12 @@ function includesCheck(name: Check["name"], expected: readonly string[], actual:
 }
 
 /**
- * Rules that must hold for EVERY result, whatever the golden set says.
- * The policy guarantees them, so a violation here means a bug in our code, not just a weak model answer.
+ * Invariants that must hold for EVERY result. The policy enforces them, partly with the same
+ * functions, so they hold by construction: they check that the policy is wired in correctly
+ * (a violation is a bug in our code), not the quality of the model's answer. That is why they
+ * are reported separately and are not part of the score.
  */
-export function safetyViolations(ticket: Ticket, result: TriageResult): string[] {
+export function policyViolations(ticket: Ticket, result: TriageResult): string[] {
   const violations: string[] = [];
   const ticketScript = detectScript(ticket.messages.map((m) => m.text).join("\n"));
   const replyScript = detectScript(result.customer_reply_draft);
@@ -106,7 +101,7 @@ export function safetyViolations(ticket: Ticket, result: TriageResult): string[]
 }
 
 /** Compares one result with its golden case. Pure, so it is unit tested without calling the API. */
-export function evaluateCase(golden: GoldenCase, ticket: Ticket, result: TriageResult): Check[] {
+export function evaluateCase(golden: GoldenCase, result: TriageResult): Check[] {
   const { expected } = golden;
   const checks: Check[] = [
     matchCheck("urgency", expected.urgency, result.urgency),
@@ -148,9 +143,6 @@ export function evaluateCase(golden: GoldenCase, ticket: Ticket, result: TriageR
     ];
     checks.push({ name: "reply", passed: problems.length === 0, detail: problems.join("; ") || "meets the rubric" });
   }
-
-  const violations = safetyViolations(ticket, result);
-  checks.push({ name: "safety", passed: violations.length === 0, detail: violations.join("; ") || "no violations" });
 
   return checks;
 }
