@@ -3,9 +3,9 @@
 An AI agent that triages customer support tickets. For each ticket it:
 
 1. classifies urgency (`critical` / `high` / `medium` / `low`)
-2. extracts key information (product, issue type, customer sentiment, language)
+2. extracts key information (product area, issue types, customer sentiment, language) as structured values
 3. searches a knowledge base for relevant articles
-4. decides the next action: `auto_respond`, `route_to_specialist` or `escalate_to_human`
+4. decides the next action (`auto_respond`, `route_to_specialist` or `escalate_to_human`), the owning team and any follow-up teams
 5. drafts a reply in the customer's language and writes an internal note for the support team
 
 It uses an OpenAI GPT model with function calling and four read-only tools (customer history, knowledge base, billing, service status). A deterministic guardrail policy checks every result after the model. It runs as a CLI or as an HTTP API.
@@ -20,16 +20,20 @@ ticket ──> LLM <──> tools (read-only, mocked data)
             └──> fail-safe: escalate_to_human, with the reason
 ```
 
+## Where to start reading
+
+The core path is four files: `src/agent.ts` (the loop), `src/prompts/system_prompt.md` (the instructions), `src/tools/` (the tools) and `src/policy.ts` (the guardrails). Everything else is an entry point around the same `triageTicket()` function: the CLI (the main way to run it), an HTTP API, an interactive terminal mode for manual testing, and the evaluation script.
+
 ## Setup
 
 Requirements: Node.js 22 or newer, and an OpenAI API key.
 
 ```bash
-npm install
+npm ci
 cp .env.example .env
 ```
 
-(On Windows: `copy .env.example .env` in cmd, or `Copy-Item .env.example .env` in PowerShell.)
+`npm ci` installs the exact versions from `package-lock.json`. (On Windows: `copy .env.example .env` in cmd, or `Copy-Item .env.example .env` in PowerShell.)
 
 Then open `.env` and set `OPENAI_API_KEY`. `OPENAI_MODEL` is optional; the default is `gpt-5.4-mini` (see `src/config.ts`). Any other model must support function calling together with structured outputs (`json_schema`), for example `gpt-4.1-mini`. Other optional settings (timeout, retries, port, host) are listed in `.env.example`.
 
@@ -82,6 +86,7 @@ npm test             # all tests, no API key needed (uses a scripted fake LLM)
 npm run typecheck
 npm run eval         # runs the REAL agent on data/golden.json and prints a score table
 npm run eval -- --runs 3   # each case 3 times, and lists checks that did not pass every run
+npm run tools:schema      # prints every tool definition exactly as the model receives it
 ```
 
 ## Project structure
@@ -110,28 +115,64 @@ src/
   chat.ts                interactive terminal mode for manual testing
   server.ts              Fastify API
 scripts/eval.ts          evaluation against the golden set (real API)
+scripts/tool-schemas.ts  prints the tool definitions (name, description, JSON Schema)
 data/                    sample tickets, mock systems, KB articles, golden.json
 tests/                   vitest tests (agent, policy, injection, tools, server, ...)
 ```
 
 ## Guardrail policy
 
-The model decides first; `src/policy.ts` then applies these rules. They can only make the outcome safer, and every rule that changes something is recorded in `guardrails_applied`.
+The model decides first; `src/policy.ts` then applies these rules. They can only make the outcome safer, and every rule that changes something is recorded in `guardrails_applied` and appended to `internal_note` as a `[Policy]` line, so the note always matches the final routing.
+
+Each rule looks at three kinds of evidence, strongest first: the model's structured classification (`issue_types`, which can only add escalations, so a fooled model cannot use it to avoid one), facts from the tools (counted only when the ticket is about that topic), and a short list of explicit English and Thai phrases as a backup.
 
 | Rule | Effect |
 |---|---|
 | verified KB articles | KB IDs the tools never returned are removed |
-| R1 money | A refund request, a dispute with the bank, duplicate or failed charges (specific phrases in the ticket, a billing problem found by the billing tool, or the model's own classification): `escalate_to_human`, `Billing`, urgency at least `high`. Questions that only mention money ("refund policy", pricing, invoices) are not matched |
-| R1 no refund promise | A reply that promises a refund, reversal or credit is replaced with a safe reply |
-| R2 enterprise outage | Enterprise customer (from the ticket or customer history) with outage evidence (a degraded component in the customer's region, 5xx errors, several people unable to work, or the model classified an outage); one user who cannot log in is not an outage: `critical`, `escalate_to_human`, `Engineering_Incident` |
+| R1 money | `billing_dispute` (refund request, dispute, duplicate or failed charge), a matching phrase, or a billing question on an account where the billing tool shows a failed activation or a repeated charge: `escalate_to_human`, `Billing`, urgency at least `high` |
+| R1 no refund promise | A reply that promises a refund, reversal, credit or compensation is replaced with a safe reply and escalated |
+| R1 money reply reviewed | An automatic reply that talks about refunds, credits or compensation goes to a human in Billing first, even without a clear promise |
+| R2 enterprise outage | Enterprise customer (from the ticket or customer history) with an `outage`, an outage phrase (site down, nobody can log in), or an access problem or bug while the customer's region is degraded: `critical`, `escalate_to_human`, `Engineering_Incident`. One user who cannot log in is not an outage |
+| critical to human | A `critical` ticket is always `escalate_to_human` |
 | R3 low confidence | Confidence below 0.7 is never auto-responded |
 | R4 auto-respond requirements | `auto_respond` only for `low`/`medium` urgency with at least one KB article |
 | R5 reply language | A reply in a different writing system than the ticket (Thai vs Latin vs other) goes to a human; it is replaced when a safe reply exists in that language (English, Thai) |
-| team assigned | A routed or escalated ticket without a team goes to `Support`; an auto-responded bug report or feature request goes to `Product` as a follow-up |
+| team assigned | A routed or escalated ticket without a team goes to `Support`; an auto-responded bug report or feature request adds `Product` to `follow_up_teams` |
 
-The evidence comes from the tools: each tool can turn its result into facts for the policy (`facts()` in the tool file), such as the plan, the region, a billing problem or degraded regions. Tools that take a `customer_id` can only look up the ticket's own customer, so a manipulated model can neither read other customers' data nor use a different customer to avoid a rule.
+`route_team` is the team that owns the ticket (`null` when the reply is sent automatically). `follow_up_teams` lists other teams that must also act; when a rule changes the owner, the previous team becomes a follow-up, so an outage ticket that also has a duplicate charge still reaches Billing.
 
-Every change is also appended to `internal_note` as a `[Policy]` line, so the note always matches the final routing. `auto_respond` with a `route_team` means the reply is sent automatically and that team gets a follow-up item (for example a bug report for `Product`).
+Tools that look up a customer declare which argument holds the ID (`customerIdArg`), and may only be called for the ticket's own customer, so a manipulated model can neither read other customers' data nor use a different customer to avoid a rule.
+
+## Tool definitions
+
+| Tool | Returns | Policy facts |
+|---|---|---|
+| `get_customer_history` | plan, seats, region, tenure, past tickets, notes | plan, region |
+| `search_knowledge_base` | up to 3 articles: id, title, url, snippet | IDs actually returned |
+| `get_billing_transactions` | current plan, pending upgrade, charges with status | failed activation or repeated charge |
+| `check_service_status` | public status page message, component status per region | degraded regions |
+
+Each schema is written once in zod and converted to JSON Schema for the model. `npm run tools:schema` prints all of them; for example `search_knowledge_base`:
+
+```json
+{
+  "name": "search_knowledge_base",
+  "description": "Search help center articles (FAQ and docs) by keywords. Returns up to 3 matches with id, title, url and snippet. Use English keywords even if the ticket is in another language.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "minLength": 1, "description": "English keywords, e.g. \"dark mode system default\"" },
+      "product": {
+        "type": "string",
+        "enum": ["billing", "platform", "appearance", "account", "other"],
+        "description": "Prefer articles for this product area. If none match, all articles are searched."
+      }
+    },
+    "required": ["query"],
+    "additionalProperties": false
+  }
+}
+```
 
 ## How to add a new tool
 
@@ -157,7 +198,7 @@ export const orderStatusTool = defineTool({
 export const TOOLS: readonly Tool[] = [customerHistoryTool, knowledgeBaseTool, billingTool, serviceStatusTool, orderStatusTool];
 ```
 
-The JSON Schema for the model is generated from the zod schema, arguments are validated before the handler runs, and errors are returned to the model instead of crashing the agent. If the result should count as evidence for a guardrail, add an optional `facts: (data) => ({ ... })` to the same `defineTool` call. Then mention the tool in `src/prompts/system_prompt.md`; a test fails if a tool is not mentioned there.
+The JSON Schema for the model is generated from the zod schema, arguments are validated before the handler runs, and errors are returned to the model instead of crashing the agent. If the tool looks up a customer, set `customerIdArg` to the argument that holds the ID, so it can only read the ticket's own customer. If the result should count as evidence for a guardrail, add an optional `facts: (data) => ({ ... })` to the same `defineTool` call. Then mention the tool in `src/prompts/system_prompt.md`; a test fails if a tool is not mentioned there.
 
 ## Sample output
 
@@ -246,7 +287,8 @@ Real results for the three sample tickets from the first run of the latest `npm 
 - **All tools are read-only.** No tool can issue refunds, change plans or send messages. Anything involving money is decided by a human.
 - **The customer's plan** comes from both the ticket's customer info and `get_customer_history`; the customer counts as Enterprise if either says so.
 - **Language checks work on writing systems** (Thai, Latin, other), which catches a reply in the wrong script without guessing. Safe fallback replies exist in English and Thai; adding a language means adding its replies in `src/policy.ts`.
-- **The golden set has two parts:** `dev` (the three sample tickets and a prompt injection case, used while writing the prompt) and `held_out` (six cases never used for tuning, including tickets that must not be escalated, a Spanish and a Thai ticket). `npm run eval` reports both.
+- **The golden set has two parts:** `dev` (the three sample tickets and a prompt injection case, looked at while writing the prompt) and `held_out` (cases the prompt was never adjusted for, including tickets that must not be escalated, Spanish and Thai tickets; the newest ones were written after the last prompt change). `npm run eval` reports both. Besides urgency, decision and team, cases can check issue types, follow-up teams and a small reply rubric (phrases the reply must or must not contain).
+- **Knowledge base search uses English keywords.** The prompt asks the model to translate the query; keyword search cannot split Thai text, which has no spaces between words.
 - **Relative message times** ("3 hours ago") are kept as in the samples; a real system would use timestamps.
 
 ## Future improvements
@@ -258,4 +300,5 @@ Real results for the three sample tickets from the first run of the latest `npm 
 - **Cache KB and customer lookups** for repeated tickets from the same customer.
 - **Vector search for the knowledge base** instead of keyword scoring, which also handles languages without spaces such as Thai.
 - **Human review dashboard** to approve or correct drafts; corrections become new golden cases.
+- **LLM-as-judge for reply quality**, with a rubric, on top of the phrase checks in the golden set.
 - More languages, real integrations, authentication and rate limiting on the API.

@@ -14,6 +14,22 @@ export type Decision = z.infer<typeof Decision>;
 export const RouteTeam = z.enum(["Billing", "Engineering_Incident", "Product", "Support"]);
 export type RouteTeam = z.infer<typeof RouteTeam>;
 
+// Structured labels, so the guardrails and analytics do not depend on free text.
+export const IssueType = z.enum([
+  "billing_dispute", // refund request, duplicate, failed or unauthorized charge, chargeback threat
+  "billing_question", // prices, plans, invoices
+  "outage", // the product is down or erroring for many users
+  "access_problem", // one person cannot log in or reach a page
+  "bug", // the product does not behave as documented
+  "feature_request",
+  "how_to",
+  "other",
+]);
+export type IssueType = z.infer<typeof IssueType>;
+
+export const ProductArea = z.enum(["billing", "platform", "appearance", "account", "other"]);
+export type ProductArea = z.infer<typeof ProductArea>;
+
 // ---------- Input: an incoming ticket ----------
 
 // Limits keep one request (e.g. through the API) from becoming very large, which costs tokens and time.
@@ -40,8 +56,8 @@ export type Ticket = z.infer<typeof Ticket>;
 // ---------- Output: the triage result ----------
 
 export const ExtractedInfo = z.object({
-  product: z.string().describe("Product area the ticket is about, e.g. Billing / Subscription, Web App, Appearance settings"),
-  issue_type: z.string().describe("Short label, e.g. duplicate_charge, outage, bug, feature_request, how_to"),
+  product: ProductArea.describe("Product area the ticket is mainly about"),
+  issue_types: z.array(IssueType).min(1).describe("Every issue in the thread, the most important first"),
   sentiment: Sentiment,
   language: z.string().describe('ISO 639-1 code of the language the customer writes in, e.g. "en" or "th"'),
 });
@@ -52,7 +68,10 @@ export const TriageResult = z.object({
   urgency: Urgency,
   extracted: ExtractedInfo,
   decision: Decision,
-  route_team: RouteTeam.nullable().describe("null only when the agent auto-responds and no team follow-up is needed"),
+  route_team: RouteTeam.nullable().describe("The team that owns the ticket; null when the reply is sent automatically"),
+  follow_up_teams: z
+    .array(RouteTeam)
+    .describe("Other teams that should also act, e.g. Product for a bug report on an auto-responded ticket"),
   kb_articles_used: z.array(z.string()).describe("IDs of knowledge base articles the reply relies on"),
   customer_reply_draft: z.string().describe("Reply to the customer, written in the customer's language"),
   internal_note: z.string().describe("Reasoning summary for the human agent, including any deadlines the customer mentioned"),

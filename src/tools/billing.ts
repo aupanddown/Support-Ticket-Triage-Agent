@@ -9,6 +9,7 @@ export const billingTool = defineTool({
   description:
     "Read-only view of a customer's current plan, pending upgrades and recent charges with their status. " +
     "Call when the ticket mentions payments, charges, refunds or plan upgrades. Cannot issue refunds or change plans.",
+  customerIdArg: "customer_id",
   args: z.object({
     customer_id: z.string().min(1).describe("Customer ID from the ticket, e.g. C-1001"),
   }),

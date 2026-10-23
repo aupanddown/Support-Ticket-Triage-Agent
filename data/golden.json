@@ -22,6 +22,17 @@
           "three",
           "TX-900"
         ]
+      ],
+      "issue_types_include": [
+        "billing_dispute"
+      ],
+      "reply_must_match": [
+        "2 hours|presentation"
+      ],
+      "reply_must_not_match": [
+        "\\bpending\\b",
+        "drop off",
+        "(do not|don't)\\s+(open|file|start|raise)\\s+(a\\s+)?(bank\\s+)?(dispute|chargeback)"
       ]
     }
   },
@@ -44,7 +55,22 @@
         ],
         [
           "demo"
+        ],
+        [
+          "SLA",
+          "1 hour",
+          "1-hour",
+          "one hour"
         ]
+      ],
+      "issue_types_include": [
+        "outage"
+      ],
+      "reply_must_not_match": [
+        "\\d+\\s*%",
+        "ap-southeast",
+        "load balancer",
+        "error rate"
       ]
     }
   },
@@ -55,7 +81,7 @@
     "expected": {
       "urgency": "low",
       "decision": "auto_respond",
-      "route_team": "Product",
+      "route_team": null,
       "reply_language": "en",
       "kb_articles_include": [
         "KB-101"
@@ -66,13 +92,17 @@
         ],
         [
           "schedul"
-        ],
-        [
-          "Product"
-        ],
-        [
-          "possible bug"
         ]
+      ],
+      "follow_up_teams_include": [
+        "Product"
+      ],
+      "issue_types_include": [
+        "bug",
+        "feature_request"
+      ],
+      "reply_must_match": [
+        "(pass|passed|share|shared|forward|forwarded|sent|flag|flagged|report|reported|let)\\b.{0,60}\\b(product|team)"
       ]
     }
   },
@@ -134,11 +164,7 @@
         "medium"
       ],
       "decision": "auto_respond",
-      "route_team": [
-        null,
-        "Support",
-        "Billing"
-      ],
+      "route_team": null,
       "reply_language": "en",
       "kb_articles_include": [
         "KB-204"
@@ -168,10 +194,7 @@
         "medium"
       ],
       "decision": "auto_respond",
-      "route_team": [
-        null,
-        "Support"
-      ],
+      "route_team": null,
       "reply_language": "en",
       "kb_articles_include": [
         "KB-402"
@@ -233,11 +256,7 @@
     "expected": {
       "urgency": "low",
       "decision": "auto_respond",
-      "route_team": [
-        null,
-        "Product",
-        "Support"
-      ],
+      "route_team": null,
       "reply_language": "es",
       "kb_articles_include": [
         "KB-101"
@@ -267,13 +286,19 @@
         "route_to_specialist",
         "auto_respond"
       ],
-      "route_team": "Product",
+      "route_team": [
+        "Product",
+        null
+      ],
       "reply_language": "en",
       "internal_note_mentions": [
         [
           "feature request",
           "feature"
         ]
+      ],
+      "issue_types_include": [
+        "feature_request"
       ]
     }
   },
@@ -300,11 +325,7 @@
         "medium"
       ],
       "decision": "auto_respond",
-      "route_team": [
-        null,
-        "Support",
-        "Billing"
-      ],
+      "route_team": null,
       "reply_language": "th",
       "kb_articles_include": [
         "KB-203"

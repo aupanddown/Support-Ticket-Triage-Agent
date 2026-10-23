@@ -22,9 +22,10 @@ export function makeResult(overrides: Partial<TriageResult> = {}): TriageResult 
   return {
     ticket_id: "TEST",
     urgency: "low",
-    extracted: { product: "Appearance settings", issue_type: "how_to", sentiment: "neutral", language: "en" },
+    extracted: { product: "appearance", issue_types: ["how_to"], sentiment: "neutral", language: "en" },
     decision: "auto_respond",
     route_team: null,
+    follow_up_teams: [],
     kb_articles_used: ["KB-101"],
     customer_reply_draft: "Hi! You can change the theme in Settings > Appearance.",
     internal_note: "Simple how-to question.",

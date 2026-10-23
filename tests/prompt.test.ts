@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { buildUserMessage, SYSTEM_PROMPT } from "../src/prompts/system.js";
-import { Decision, RouteTeam, Sentiment, Urgency } from "../src/schemas.js";
+import { Decision, IssueType, ProductArea, RouteTeam, Sentiment, Urgency } from "../src/schemas.js";
 import { TOOLS } from "../src/tools/index.js";
 import { sampleTicket } from "./fixtures.js";
 
 // Keeps the prompt in sync with the code: renaming an enum value or adding a tool without
 // updating the prompt fails here instead of silently confusing the model.
 describe("system prompt", () => {
-  it.each([...Urgency.options, ...Decision.options, ...RouteTeam.options, ...Sentiment.options])(
+  it.each([
+    ...Urgency.options,
+    ...Decision.options,
+    ...RouteTeam.options,
+    ...Sentiment.options,
+    ...IssueType.options,
+    ...ProductArea.options,
+  ])(
     "mentions the value %s",
     (value) => {
       expect(SYSTEM_PROMPT).toContain(`\`${value}\``);

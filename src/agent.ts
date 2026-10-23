@@ -114,9 +114,10 @@ export function failSafeResult(ticket: Ticket, reason: string, facts: PolicyFact
   const result: TriageResult = {
     ticket_id: ticket.id,
     urgency: "high",
-    extracted: { product: "unknown", issue_type: "unknown", sentiment: "neutral", language },
+    extracted: { product: "other", issue_types: ["other"], sentiment: "neutral", language },
     decision: "escalate_to_human",
     route_team: "Support",
+    follow_up_teams: [],
     kb_articles_used: [],
     customer_reply_draft: safeReply(language, "general"),
     internal_note: `Automatic triage failed: ${reason}. Please triage this ticket manually.`,

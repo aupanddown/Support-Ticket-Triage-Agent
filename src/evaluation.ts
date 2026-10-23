@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { detectScript } from "./language.js";
 import { promisesRefund } from "./policy.js";
-import { Decision, RouteTeam, Ticket, type TriageResult, Urgency } from "./schemas.js";
+import { Decision, IssueType, RouteTeam, Ticket, type TriageResult, Urgency } from "./schemas.js";
 
 // ---------- Golden set format (data/golden.json) ----------
 
@@ -24,12 +24,19 @@ export const GoldenCase = z.object({
     urgency: oneOrMany(Urgency),
     decision: oneOrMany(Decision),
     route_team: oneOrMany(RouteTeam.nullable()),
+    /** Teams that must be among the follow-up teams. */
+    follow_up_teams_include: z.array(RouteTeam).default([]),
+    /** Issue types the model must have recognized. */
+    issue_types_include: z.array(IssueType).default([]),
     /** ISO 639-1 code, e.g. "en", "th", "es". */
     reply_language: z.string().min(2),
     /** Article IDs the result must cite. */
     kb_articles_include: z.array(z.string()).default([]),
     /** Each inner list is a group of synonyms; the note must mention at least one word of every group. */
     internal_note_mentions: z.array(z.array(z.string()).min(1)).default([]),
+    /** Reply quality: case-insensitive regexes the reply must match, and must not match. */
+    reply_must_match: z.array(z.string()).default([]),
+    reply_must_not_match: z.array(z.string()).default([]),
   }),
 });
 export type GoldenCase = z.infer<typeof GoldenCase>;
@@ -39,7 +46,17 @@ export const GoldenSet = z.array(GoldenCase).min(1);
 // ---------- Checks ----------
 
 export interface Check {
-  name: "urgency" | "decision" | "route_team" | "reply_language" | "kb_articles" | "internal_note" | "safety";
+  name:
+    | "urgency"
+    | "decision"
+    | "route_team"
+    | "follow_up_teams"
+    | "issue_types"
+    | "reply_language"
+    | "kb_articles"
+    | "internal_note"
+    | "reply"
+    | "safety";
   passed: boolean;
   detail: string;
 }
@@ -61,6 +78,12 @@ function matchCheck<T>(name: Check["name"], expected: T | T[], actual: T): Check
   return { name, passed, detail: passed ? String(actual) : `${actual} (expected ${accepted.join(" or ")})` };
 }
 
+/** Passes when every expected item is present, e.g. issue types or follow-up teams. */
+function includesCheck(name: Check["name"], expected: readonly string[], actual: readonly string[]): Check {
+  const missing = expected.filter((item) => !actual.includes(item));
+  return { name, passed: missing.length === 0, detail: missing.length === 0 ? actual.join(", ") : `missing ${missing.join(", ")}` };
+}
+
 /**
  * Rules that must hold for EVERY result, whatever the golden set says.
  * The policy guarantees them, so a violation here means a bug in our code, not just a weak model answer.
@@ -77,6 +100,8 @@ export function safetyViolations(ticket: Ticket, result: TriageResult): string[]
     if (result.kb_articles_used.length === 0) violations.push("auto_respond without a KB article");
     if (result.confidence < 0.7) violations.push("auto_respond with confidence below 0.7");
   }
+  if (result.urgency === "critical" && result.decision !== "escalate_to_human") violations.push("critical not escalated");
+  if (result.decision !== "auto_respond" && result.route_team === null) violations.push("needs a person but has no team");
   return violations;
 }
 
@@ -87,8 +112,14 @@ export function evaluateCase(golden: GoldenCase, ticket: Ticket, result: TriageR
     matchCheck("urgency", expected.urgency, result.urgency),
     matchCheck("decision", expected.decision, result.decision),
     matchCheck("route_team", expected.route_team, result.route_team),
-    replyLanguageCheck(expected.reply_language, result),
   ];
+  if (expected.follow_up_teams_include.length > 0) {
+    checks.push(includesCheck("follow_up_teams", expected.follow_up_teams_include, result.follow_up_teams));
+  }
+  if (expected.issue_types_include.length > 0) {
+    checks.push(includesCheck("issue_types", expected.issue_types_include, result.extracted.issue_types));
+  }
+  checks.push(replyLanguageCheck(expected.reply_language, result));
 
   if (expected.kb_articles_include.length > 0) {
     const missing = expected.kb_articles_include.filter((id) => !result.kb_articles_used.includes(id));
@@ -107,6 +138,15 @@ export function evaluateCase(golden: GoldenCase, ticket: Ticket, result: TriageR
       passed: missing.length === 0,
       detail: missing.length === 0 ? "mentions all key facts" : `missing: ${missing.map((g) => g.join(" / ")).join("; ")}`,
     });
+  }
+
+  if (expected.reply_must_match.length > 0 || expected.reply_must_not_match.length > 0) {
+    const reply = result.customer_reply_draft;
+    const problems = [
+      ...expected.reply_must_match.filter((p) => !new RegExp(p, "i").test(reply)).map((p) => `lacks /${p}/`),
+      ...expected.reply_must_not_match.filter((p) => new RegExp(p, "i").test(reply)).map((p) => `contains /${p}/`),
+    ];
+    checks.push({ name: "reply", passed: problems.length === 0, detail: problems.join("; ") || "meets the rubric" });
   }
 
   const violations = safetyViolations(ticket, result);

@@ -71,7 +71,7 @@ export async function executeTool(
   }
 
   // Least privilege: even a manipulated model can only read the ticket's own customer's data.
-  const customerId = (parsed.data as { customer_id?: unknown }).customer_id;
+  const customerId = tool.customerIdArg ? (parsed.data as Record<string, unknown>)[tool.customerIdArg] : undefined;
   if (scope && customerId !== undefined && customerId !== scope.customerId) {
     return { ok: false, error: `Only the ticket's customer (${scope.customerId}) can be looked up` };
   }

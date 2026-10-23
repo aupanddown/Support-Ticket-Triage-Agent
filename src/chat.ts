@@ -28,18 +28,19 @@ const DECISION_LABEL: Record<Decision, string> = {
   escalate_to_human: "Escalate to human",
 };
 
-const URGENCY_COLOR: Record<Urgency, Parameters<typeof styleText>[0]> = {
-  critical: ["red", "bold"],
-  high: "red",
-  medium: "yellow",
-  low: "green",
+// Single-format styleText calls (nested for two formats) work on every Node 22 release.
+const URGENCY_STYLE: Record<Urgency, (text: string) => string> = {
+  critical: (text) => styleText("red", styleText("bold", text)),
+  high: (text) => styleText("red", text),
+  medium: (text) => styleText("yellow", text),
+  low: (text) => styleText("green", text),
 };
 
 const KB_TITLES = new Map(articles.map((a) => [a.id, a.title]));
 
 // ---------- Formatting helpers ----------
 
-const heading = (text: string) => console.log(`\n${styleText(["bold", "cyan"], text)}`);
+const heading = (text: string) => console.log(`\n${styleText("cyan", styleText("bold", text))}`);
 const dim = (text: string) => styleText("dim", text);
 
 /** Word-wraps text to the terminal width, keeping the original line breaks. */
@@ -107,10 +108,11 @@ function printEvent(event: AgentEvent): void {
 
 function printResult(r: TriageResult): void {
   heading("RESULT");
-  row("Urgency", styleText(URGENCY_COLOR[r.urgency], r.urgency.toUpperCase()));
+  row("Urgency", URGENCY_STYLE[r.urgency](r.urgency.toUpperCase()));
   row("Decision", `${DECISION_LABEL[r.decision]}${r.route_team ? `  ->  ${r.route_team}` : ""}`);
+  row("Follow-up", r.follow_up_teams.join(", ") || "none");
   row("Product", r.extracted.product);
-  row("Issue type", r.extracted.issue_type);
+  row("Issue types", r.extracted.issue_types.join(", "));
   row("Sentiment", r.extracted.sentiment);
   row("Language", r.extracted.language);
   row("Confidence", `${Math.round(r.confidence * 100)}%`);

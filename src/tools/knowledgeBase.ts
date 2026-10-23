@@ -1,10 +1,9 @@
 import { z } from "zod";
 import articles from "../../data/kb_articles.json" with { type: "json" };
+import { ProductArea } from "../schemas.js";
 import { defineTool } from "./tool.js";
 
 type Article = (typeof articles)[number];
-
-export const KbProduct = z.enum(["billing", "platform", "appearance"]);
 
 const MAX_RESULTS = 3;
 const SNIPPET_LENGTH = 500; // Articles are short; a real KB would return the best matching passage.
@@ -60,7 +59,7 @@ export const knowledgeBaseTool = defineTool({
     "Use English keywords even if the ticket is in another language.",
   args: z.object({
     query: z.string().min(1).describe('English keywords, e.g. "dark mode system default"'),
-    product: KbProduct.optional().describe(
+    product: ProductArea.optional().describe(
       "Prefer articles for this product area. If none match, all articles are searched.",
     ),
   }),

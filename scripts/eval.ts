@@ -46,16 +46,22 @@ function label(r: CaseReport, runs: number): string {
 }
 
 function printTable(reports: CaseReport[], runs: number): void {
-  const header = ["Ticket", "Set", "Urgency", "Decision", "Team", "Lang", "KB", "Note", "Safety", "Tools", "Time", "Score"];
+  const header = [
+    "Ticket", "Set", "Urgency", "Decision", "Team", "Follow", "Issues", "Lang", "KB", "Note", "Reply", "Safety",
+    "Tools", "Time", "Score",
+  ];
   const rows = reports.map((r) => [
     label(r, runs),
     r.set,
     cell(find(r.checks, "urgency"), true),
     cell(find(r.checks, "decision"), true),
     cell(find(r.checks, "route_team"), true),
+    cell(find(r.checks, "follow_up_teams"), false),
+    cell(find(r.checks, "issue_types"), false),
     cell(find(r.checks, "reply_language"), true),
     cell(find(r.checks, "kb_articles"), false),
     cell(find(r.checks, "internal_note"), false),
+    cell(find(r.checks, "reply"), false),
     cell(find(r.checks, "safety"), false),
     String(r.toolCalls),
     `${r.seconds.toFixed(1)}s`,

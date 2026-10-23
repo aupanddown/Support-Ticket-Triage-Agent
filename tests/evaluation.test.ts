@@ -84,6 +84,51 @@ describe("safetyViolations", () => {
       "auto_respond at critical urgency",
       "auto_respond without a KB article",
       "auto_respond with confidence below 0.7",
+      "critical not escalated",
     ]);
+  });
+
+  it("flags a ticket that needs a person but has no team", () => {
+    const orphan = makeResult({ decision: "route_to_specialist", route_team: null });
+    expect(safetyViolations(sampleTicket("T3"), orphan)).toEqual(["needs a person but has no team"]);
+  });
+});
+
+describe("structured and reply checks", () => {
+  const golden = (expected: Record<string, unknown>) =>
+    GoldenSet.parse([
+      {
+        ticket_id: "T3",
+        description: "test",
+        expected: { urgency: "low", decision: "auto_respond", route_team: null, reply_language: "en", ...expected },
+      },
+    ])[0]!;
+  const byName = (checks: ReturnType<typeof evaluateCase>, name: string) => checks.find((c) => c.name === name);
+
+  it("checks issue types and follow-up teams", () => {
+    const result = makeResult({
+      extracted: { ...makeResult().extracted, issue_types: ["how_to", "bug"] },
+      follow_up_teams: ["Product"],
+    });
+    const checks = evaluateCase(
+      golden({ issue_types_include: ["bug", "feature_request"], follow_up_teams_include: ["Product"] }),
+      sampleTicket("T3"),
+      result,
+    );
+    expect(byName(checks, "issue_types")).toMatchObject({ passed: false, detail: "missing feature_request" });
+    expect(byName(checks, "follow_up_teams")).toMatchObject({ passed: true });
+  });
+
+  it("checks the reply against a rubric of required and forbidden phrases", () => {
+    const result = makeResult({ customer_reply_draft: "The pending charges will drop off soon." });
+    const checks = evaluateCase(
+      golden({ reply_must_match: ["presentation"], reply_must_not_match: ["\\bpending\\b"] }),
+      sampleTicket("T3"),
+      result,
+    );
+    expect(byName(checks, "reply")).toMatchObject({
+      passed: false,
+      detail: "lacks /presentation/; contains /\\bpending\\b/",
+    });
   });
 });

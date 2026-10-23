@@ -8,9 +8,10 @@ import { sampleTicket } from "./fixtures.js";
 /** A good model answer for T3 (dark mode question). */
 const T3_OUTPUT: LlmTriageOutput = {
   urgency: "low",
-  extracted: { product: "Appearance settings", issue_type: "bug_and_feature_request", sentiment: "positive", language: "en" },
+  extracted: { product: "appearance", issue_types: ["how_to", "bug", "feature_request"], sentiment: "positive", language: "en" },
   decision: "auto_respond",
-  route_team: "Product",
+  route_team: null,
+  follow_up_teams: ["Product"],
   kb_articles_used: ["KB-101"],
   customer_reply_draft: "Hi! Thanks for the details. Settings > Appearance has Light and System Default...",
   internal_note: "Possible bug: System Default does not follow macOS dark mode. Feature request: scheduled dark mode.",
@@ -117,7 +118,7 @@ describe("agent loop", () => {
         route_team: "Support",
         kb_articles_used: [],
         customer_reply_draft: "ขออภัยครับ กำลังตรวจสอบให้ครับ",
-        extracted: { ...T3_OUTPUT.extracted, issue_type: "login_issue", language: "th" },
+        extracted: { ...T3_OUTPUT.extracted, issue_types: ["access_problem"], language: "th" },
       }),
     ]);
 
@@ -128,17 +129,21 @@ describe("agent loop", () => {
     expect(result).toMatchObject({ urgency: "critical", route_team: "Engineering_Incident" });
   });
 
-  it("uses facts from tool results as policy evidence", async () => {
-    // T1's billing data shows a failed activation, so the ticket goes to Billing even if the model says otherwise.
-    const llm = new FakeLlmClient([
-      toolCalls({ name: "get_billing_transactions", args: { customer_id: "C-1001" } }),
-      finalAnswer({ ...T3_OUTPUT, decision: "route_to_specialist", route_team: "Support", kb_articles_used: [] }),
-    ]);
+  it("uses a billing problem on the account as evidence when the ticket is about billing", async () => {
+    // T1's billing data shows a failed activation; the model only calls it a billing question.
     const ticket = { ...sampleTicket("T1"), messages: [{ sent: "now", text: "Why is my account still on Free?" }] };
+    const answer = (issue_types: LlmTriageOutput["extracted"]["issue_types"]) =>
+      new FakeLlmClient([
+        toolCalls({ name: "get_billing_transactions", args: { customer_id: "C-1001" } }),
+        finalAnswer({ ...T3_OUTPUT, extracted: { ...T3_OUTPUT.extracted, issue_types }, follow_up_teams: [] }),
+      ]);
 
-    const result = await triageTicket(ticket, { llm });
+    const aboutBilling = await triageTicket(ticket, { llm: answer(["billing_question"]) });
+    expect(aboutBilling).toMatchObject({ decision: "escalate_to_human", route_team: "Billing" });
 
-    expect(result).toMatchObject({ decision: "escalate_to_human", route_team: "Billing" });
+    // The same account fact does not escalate a ticket that is not about billing.
+    const howTo = await triageTicket(ticket, { llm: answer(["how_to"]) });
+    expect(howTo.route_team).not.toBe("Billing");
   });
 
   it("feeds tool errors back to the model so it can recover", async () => {

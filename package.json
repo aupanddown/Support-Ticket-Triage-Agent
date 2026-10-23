@@ -8,7 +8,8 @@
     "serve": "tsx src/server.ts",
     "eval": "tsx scripts/eval.ts",
     "typecheck": "tsc --noEmit",
-    "chat": "tsx src/chat.ts"
+    "chat": "tsx src/chat.ts",
+    "tools:schema": "tsx scripts/tool-schemas.ts"
   },
   "license": "UNLICENSED",
   "type": "module",

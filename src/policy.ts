@@ -1,13 +1,19 @@
 import { detectScript, fallbackLanguage, type ReplyLanguage } from "./language.js";
-import type { RouteTeam, Ticket, TriageResult, Urgency } from "./schemas.js";
+import type { IssueType, RouteTeam, Ticket, TriageResult, Urgency } from "./schemas.js";
 
 /**
  * Deterministic guardrails applied AFTER the LLM.
  *
  * The LLM is good at understanding tickets but can be wrong or manipulated (prompt injection),
  * so these rules have the final say. Every rule can only make the outcome safer: raise urgency,
- * hand the ticket to a human, assign a team, or replace an unsafe reply. None of them can undo
- * an escalation. All functions here are pure: no I/O, no mutation of the input.
+ * hand the ticket to a human, add a team, or replace an unsafe reply. None of them can undo an
+ * escalation. All functions here are pure: no I/O, no mutation of the input.
+ *
+ * Signals, strongest first:
+ * 1. the model's structured classification (`issue_types`), which can only ADD escalations,
+ *    so a fooled model cannot use it to avoid one;
+ * 2. facts from tool results, counted only when the ticket is about that topic;
+ * 3. a short list of explicit phrases, as a backup in case the model misses the obvious.
  */
 
 /** Evidence from tool results (see `Tool.facts`). Every field is optional: a tool may not have been called. */
@@ -33,58 +39,62 @@ export interface Rule {
   apply(result: TriageResult, ctx: PolicyContext): TriageResult;
 }
 
-// ---------- Signals (English and Thai) ----------
-// Each signal combines specific phrases in the ticket, facts from the tools, and the model's own
-// classification. Using the model's classification only ever ADDS escalations, so a fooled model
-// cannot use it to avoid one. Single words ("refund", "dispute", "down") are not enough on their own.
+// ---------- Backup phrase lists (English and Thai) ----------
 
-// A money matter only a human may decide: asking for a refund, a dispute with the bank,
-// duplicate, failed or unauthorized charges. "What is your refund policy?" is not one.
+// A money matter only a human may decide: refund requests, disputes, duplicate, failed or
+// unauthorized charges. "What is your refund policy?" is not one.
 const MONEY_RISK_TEXT = new RegExp(
   [
     String.raw`\b(refund me|money back|chargebacks?)\b`,
     String.raw`\b(want|need|get|request|requesting|asking for|issue|give me|process)\s+(me\s+)?(a\s+|my\s+)?(full\s+)?refund`,
     String.raw`\bdisput\w*\b.{0,40}\b(bank|card|charges?|payments?|transactions?)\b`,
     String.raw`\b(charged|billed)\s+(me\s+)?(twice|again|two times|three times|multiple times|\d+ times)\b`,
-    String.raw`\b(double|duplicate|unauthori[sz]ed)\s+(charges?|payments?|transactions?)\b`,
+    String.raw`\b(double|duplicate)[- ]charg\w*`,
+    String.raw`\b(double|duplicate|unauthori[sz]ed)\s+(payments?|transactions?)\b`,
     String.raw`\b(see|have|got|there are|now)\s+(double|multiple|two|three|\d+)\s+(pending\s+)?charges\b`,
+    String.raw`\breverse\s+(the\s+|this\s+|these\s+|my\s+|all\s+)?(charges?|payments?|transactions?)\b`,
     String.raw`\bcharges?\s+(\w+\s+){0,2}reversed\b`,
     String.raw`\b(payments?\s+(failed|declined|did not go through|didn't go through)|failed payments?)\b`,
     "ขอคืนเงิน|ขอเงินคืน|คืนเงินให้|ตัดเงินซ้ำ|หักเงินซ้ำ|เรียกเก็บซ้ำ|จ่ายเงินไม่ผ่าน|ชำระเงินไม่สำเร็จ",
+    "(โดน|ถูก)(ตัด|หัก)เงิน.{0,10}(ครั้ง|รอบ|ซ้ำ)",
   ].join("|"),
   "i",
 );
-const MONEY_RISK_ISSUE_TYPE =
-  /refund_request|duplicate_charge|double_charge|chargeback|payment_dispute|payment_failed|failed_payment|overcharg|unauthorized_charge/i;
 
-// The product is down for the customer: server errors, many people affected, or a stated outage.
-// One person who cannot log in is not an outage.
+// The product is down for many people. One user who cannot log in, or one error on one file, is not an outage.
 const OUTAGE_TEXT = new RegExp(
   [
-    String.raw`\b(outage|error\s*5\d\d|5\d\d\s*error|http\s*5\d\d)\b`,
-    String.raw`\b(app|site|system|service|platform|website)\s+(is|went)\s+down\b`,
-    String.raw`\b(coworkers|colleagues|everyone|nobody|no one|whole team|all (of )?(our|my) users)\b.{0,30}\b(can'?t|cannot|unable to)\b`,
+    String.raw`\b(outage|(app|site|system|service|platform|website)\s+(is|went)\s+down)\b`,
+    String.raw`\b(error|5\d\d|down|can'?t|cannot|unable|not working)\b.{0,40}\bfor\s+(everyone|all\s+(of\s+)?(our|my)\s+users|the\s+whole\s+team|our\s+whole\s+team)\b`,
+    String.raw`\b(nobody|no one)\b.{0,30}\bcan\b`,
+    String.raw`\b(coworkers|colleagues|everyone|whole team|all (of )?(our|my) users)\b.{0,30}\b(can'?t|cannot|unable to)\b`,
     "ระบบล่ม|ระบบเข้าไม่ได้|ระบบใช้งานไม่ได้|(เพื่อนร่วมงาน|ทุกคน).{0,15}(เข้าไม่ได้|ใช้งานไม่ได้|ใช้ไม่ได้)",
   ].join("|"),
   "i",
 );
-const OUTAGE_ISSUE_TYPE = /outage|incident|downtime/i;
 
 const ENTERPRISE = /\benterprise\b/i;
-const FOLLOW_UP_ISSUE_TYPE = /bug|feature/i;
 
-// Phrases that promise or confirm a refund or compensation. Best effort: replies on money
-// tickets are escalated anyway, so a human reviews them before anything is sent.
+// Phrases that promise or confirm a refund, credit or compensation. Only a human in Billing may decide that.
 const REFUND_PROMISE_PATTERNS: readonly RegExp[] = [
-  /\b(we|i)('ll|'ve| will| have| am going to| are going to)\s+(\w+\s+){0,5}(refund|reverse|reimburse|credit)/i,
+  /\b(we|i)('ll|'re|'ve| will| are| have| am| am going to| are going to)\s+(\w+\s+){0,5}(refund\w*|revers\w*|reimburs\w*)/i,
+  /\b(we|i)('ll|'re| will| are| am)\s+(\w+\s+){0,3}(issu\w*|giv\w*|add\w*|appl\w*)\s+(you\s+|your account\s+)?(a\s+|an\s+)?(full\s+|partial\s+)?(refund|credit|discount)\b/i,
+  /\bcredit\w*\s+(to\s+)?(your|the)\s+account\b/i,
   /\b(team|billing)\s+will\s+(\w+\s+){0,2}(refund|reverse|reimburse)/i,
   /\b(refunds?|reversals?|reimbursements?)\s+(has|have|will|is|are)\s+(been\s+)?(be\s+)?(issued|processed|approved|initiated|sent)/i,
   /\b(will|shall)\s+be\s+(fully\s+)?(refunded|reversed|reimbursed|credited|returned)\b/i,
   /\b(has|have)\s+been\s+(fully\s+)?(refunded|reversed|reimbursed|credited)\b/i,
   /\byou('ll| will)\s+(\w+\s+){0,3}(get|receive|see)\s+(\w+\s+){0,3}(refund|money back)/i,
+  /\b(as (an apology|compensation)|by way of compensation)\b/i,
+  /\b(a\s+)?(month|months|week|weeks)\s+(for\s+)?free\b|\bfree\s+(month|months|week|weeks)\b/i,
   /\bguarantee\w*\b.*\brefund/i,
-  /จะ.{0,20}คืนเงิน|คืนเงินให้/,
+  /จะ.{0,20}คืนเงิน|คืนเงินให้|ชดเชยให้/,
 ];
+
+// Money words in a reply. An AUTOMATIC reply that talks about money is reviewed by a human,
+// even when no promise pattern matched ("credit card" / "บัตรเครดิต" is not counted).
+const MONEY_IN_REPLY =
+  /\b(refund\w*|reimburs\w*|compensat\w*|chargebacks?|money back|credit(?!\s*card)\w*)\b|คืนเงิน|ชดเชย|(?<!บัตร)เครดิต/i;
 
 /**
  * Normalizes quotes before matching: models often write typographic quotes ("We’ll") instead of "We'll".
@@ -98,12 +108,12 @@ function customerText(ticket: Ticket): string {
   return normalize(ticket.messages.map((m) => m.text).join("\n"));
 }
 
-/** True when the ticket text raises a money matter that only a human in Billing may decide. */
+/** Backup signal: the ticket text raises a money matter that only a human in Billing may decide. */
 export function mentionsMoneyRisk(ticket: Ticket): boolean {
   return MONEY_RISK_TEXT.test(customerText(ticket));
 }
 
-/** True when the ticket text describes an outage rather than a single user's problem. */
+/** Backup signal: the ticket text describes an outage rather than a single user's problem. */
 export function mentionsOutage(ticket: Ticket): boolean {
   return OUTAGE_TEXT.test(customerText(ticket));
 }
@@ -111,6 +121,10 @@ export function mentionsOutage(ticket: Ticket): boolean {
 export function promisesRefund(reply: string): boolean {
   const text = normalize(reply);
   return REFUND_PROMISE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+export function mentionsMoneyInReply(reply: string): boolean {
+  return MONEY_IN_REPLY.test(normalize(reply));
 }
 
 // ---------- Safe fallback replies (never promise refunds or compensation) ----------
@@ -155,9 +169,24 @@ export function atLeast(current: Urgency, minimum: Urgency): Urgency {
   return URGENCY_RANK[current] >= URGENCY_RANK[minimum] ? current : minimum;
 }
 
-/** Hands the ticket to a human, keeping the team the LLM chose if there is one. */
+function hasIssue(result: TriageResult, ...types: IssueType[]): boolean {
+  return types.some((type) => result.extracted.issue_types.includes(type));
+}
+
+function addFollowUp(result: TriageResult, team: RouteTeam): TriageResult {
+  if (result.follow_up_teams.includes(team)) return result;
+  return { ...result, follow_up_teams: [...result.follow_up_teams, team] };
+}
+
+/**
+ * Hands the ticket to a human. A new owner team keeps the previous team as a follow-up,
+ * so e.g. an outage ticket that also has a duplicate charge still reaches Billing.
+ */
 function escalate(result: TriageResult, team?: RouteTeam): TriageResult {
-  return { ...result, decision: "escalate_to_human", route_team: team ?? result.route_team ?? "Support" };
+  const owner = team ?? result.route_team ?? "Support";
+  const previous = result.route_team;
+  const escalated: TriageResult = { ...result, decision: "escalate_to_human", route_team: owner };
+  return previous && previous !== owner ? addFollowUp(escalated, previous) : escalated;
 }
 
 // ---------- Rules, applied in this order ----------
@@ -173,16 +202,18 @@ export const RULES: readonly Rule[] = [
   },
   {
     // Rule 1: refunds, disputes, duplicate or failed charges always go to a human in Billing.
+    // A billing problem on the account counts only when the ticket is about billing.
     id: "R1_money_to_billing",
     apply: (result, { ticket, facts }) => {
+      const aboutBilling = hasIssue(result, "billing_dispute", "billing_question");
       const moneyRisk =
-        mentionsMoneyRisk(ticket) || facts.billingProblem === true || MONEY_RISK_ISSUE_TYPE.test(result.extracted.issue_type);
+        hasIssue(result, "billing_dispute") || mentionsMoneyRisk(ticket) || (aboutBilling && facts.billingProblem === true);
       if (!moneyRisk) return result;
       return { ...escalate(result, "Billing"), urgency: atLeast(result.urgency, "high") };
     },
   },
   {
-    // Rule 1 (reply part): never promise a refund, whatever the ticket says.
+    // Rule 1 (reply part): never promise a refund or compensation, whatever the ticket says.
     id: "R1_no_refund_promise",
     apply: (result, { ticket }) => {
       if (!promisesRefund(result.customer_reply_draft)) return result;
@@ -191,7 +222,16 @@ export const RULES: readonly Rule[] = [
     },
   },
   {
+    // Backup for rule 1: an automatic reply that talks about money is checked by a human first.
+    id: "R1_money_reply_reviewed",
+    apply: (result) =>
+      result.decision === "auto_respond" && mentionsMoneyInReply(result.customer_reply_draft)
+        ? escalate(result, "Billing")
+        : result,
+  },
+  {
     // Rule 2: an Enterprise customer with an outage is a critical incident.
+    // A degraded region counts only when the ticket reports a problem, not for a how-to question.
     id: "R2_enterprise_outage",
     apply: (result, { ticket, facts }) => {
       // Enterprise if EITHER source says so, so a lookup can never make the outcome less safe.
@@ -199,13 +239,18 @@ export const RULES: readonly Rule[] = [
       const regionDegraded =
         facts.customerRegion !== undefined && (facts.degradedRegions ?? []).includes(facts.customerRegion);
       const isOutage =
-        regionDegraded ||
+        hasIssue(result, "outage") ||
         mentionsOutage(ticket) ||
-        OUTAGE_ISSUE_TYPE.test(result.extracted.issue_type) ||
-        result.route_team === "Engineering_Incident";
+        (regionDegraded && hasIssue(result, "access_problem", "bug"));
       if (!isEnterprise || !isOutage) return result;
       return { ...escalate(result, "Engineering_Incident"), urgency: "critical" };
     },
+  },
+  {
+    // Critical means a person acts now: it is never auto-answered or left in a queue.
+    id: "critical_to_human",
+    apply: (result) =>
+      result.urgency === "critical" && result.decision !== "escalate_to_human" ? escalate(result) : result,
   },
   {
     // Rule 3: a low-confidence answer must not be sent automatically.
@@ -247,13 +292,15 @@ export const RULES: readonly Rule[] = [
     },
   },
   {
-    // Every ticket that needs a person has an owner: a bug or feature request goes to Product even when the
-    // reply is sent automatically, and any routed or escalated ticket without a team goes to Support.
+    // Every ticket that needs a person has an owner, and bug reports or feature requests on an
+    // automatically answered ticket still reach Product as a follow-up.
     id: "team_assigned",
     apply: (result) => {
-      if (result.route_team !== null) return result;
-      if (result.decision !== "auto_respond") return { ...result, route_team: "Support" };
-      return FOLLOW_UP_ISSUE_TYPE.test(result.extracted.issue_type) ? { ...result, route_team: "Product" } : result;
+      if (result.decision !== "auto_respond" && result.route_team === null) return { ...result, route_team: "Support" };
+      if (result.decision === "auto_respond" && hasIssue(result, "bug", "feature_request")) {
+        return addFollowUp(result, "Product");
+      }
+      return result;
     },
   },
 ];
@@ -266,6 +313,9 @@ function describeChanges(before: TriageResult, after: TriageResult): string[] {
   if (before.urgency !== after.urgency) changes.push(`urgency ${before.urgency} -> ${after.urgency}`);
   if (before.decision !== after.decision) changes.push(`decision ${before.decision} -> ${after.decision}`);
   if (before.route_team !== after.route_team) changes.push(`route_team ${before.route_team} -> ${after.route_team}`);
+  if (before.follow_up_teams.join() !== after.follow_up_teams.join()) {
+    changes.push(`follow_up_teams [${before.follow_up_teams}] -> [${after.follow_up_teams}]`);
+  }
   if (before.extracted.language !== after.extracted.language) {
     changes.push(`language ${before.extracted.language} -> ${after.extracted.language}`);
   }
