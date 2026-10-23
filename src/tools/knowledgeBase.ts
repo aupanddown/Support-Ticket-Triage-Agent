@@ -17,12 +17,20 @@ const STOP_WORDS = new Set([
   "of", "on", "or", "the", "to", "what", "why", "with", "you", "your",
 ]);
 
-/** Lowercase words, split on anything that is not a letter or digit (Unicode aware). */
+/** Minimal plural stemming, applied to queries and articles alike, so "refunds" matches "refund". */
+function stem(word: string): string {
+  if (word.length > 4 && word.endsWith("ies")) return `${word.slice(0, -3)}y`;
+  if (word.length > 3 && word.endsWith("s") && !word.endsWith("ss")) return word.slice(0, -1);
+  return word;
+}
+
+/** Lowercase, stemmed words, split on anything that is not a letter or digit (Unicode aware). */
 export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
-    .filter((word) => word.length > 1 && !STOP_WORDS.has(word));
+    .filter((word) => word.length > 1 && !STOP_WORDS.has(word))
+    .map(stem);
 }
 
 /** Simple keyword scoring. Good enough for a handful of articles; swap for vector search at scale. */

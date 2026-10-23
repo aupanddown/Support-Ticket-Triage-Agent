@@ -80,7 +80,7 @@ A short summary for the human agent who picks up the ticket:
 
 - `extracted.product`: the product area, for example "Billing / Pro upgrade", "Web App", "Appearance settings".
 - `extracted.issue_type`: a short snake_case label, for example `duplicate_charge`, `outage`, `bug`, `feature_request`, `how_to`. Combine labels if needed.
-- `extracted.sentiment`: `positive`, `neutral`, `negative`, or `angry`, based on the latest state of the thread.
+- `extracted.sentiment`: based on the latest state of the thread. `angry`: shouting, insults or threats (for example capital letters, "HELLO??", a dispute threat). `negative`: worried, frustrated or urgent but still polite. `neutral` or `positive` otherwise. Urgency and sentiment are separate: a polite customer can have a critical problem.
 - `extracted.language`: ISO 639-1 code of the customer's language, for example `en` or `th`.
 - `kb_articles_used`: IDs of the retrieved articles your reply or decision relies on. Only use IDs returned by `search_knowledge_base`.
 - `confidence`: from 0 to 1, how sure you are about urgency and decision. Be honest: below 0.7 the ticket is never auto-responded.

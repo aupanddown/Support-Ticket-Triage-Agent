@@ -72,6 +72,10 @@ describe("search_knowledge_base", () => {
     expect(tokenize("Is the Dark-Mode on?")).toEqual(["dark", "mode"]);
   });
 
+  it("matches plurals and singulars", () => {
+    expect(tokenize("refunds charges invoices")).toEqual(tokenize("refund charge invoice"));
+  });
+
   it("weights title matches above body matches", () => {
     const article = { id: "X", title: "Refund", url: "", product: "billing", tags: [], body: "export" };
     expect(scoreArticle(article, ["refund"])).toBeGreaterThan(scoreArticle(article, ["export"]));
