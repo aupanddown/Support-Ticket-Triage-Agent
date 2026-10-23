@@ -1,128 +1,148 @@
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { styleText } from "node:util";
+import articles from "../data/kb_articles.json" with { type: "json" };
 import { type AgentEvent, triageTicket } from "./agent.js";
 import { loadConfig } from "./config.js";
 import { createOpenAiLlmClient, type LlmClient } from "./llm/client.js";
-import type { Ticket, TicketMessage, TriageResult } from "./schemas.js";
+import type { Decision, Ticket, TriageResult, Urgency } from "./schemas.js";
 import { loadSampleTickets } from "./tickets.js";
 
 /**
  * Interactive manual testing in the terminal, based on the sample tickets.
  *
- * Pick T1, T2 or T3, then press Enter to reveal the customer's messages one by one.
- * After each message the agent triages the thread so far, so you can see urgency and
- * decision change as the thread develops. You can also type your own message as the
- * customer (for example a prompt injection) to see how the agent and the policy react.
+ * Pick T1, T2 or T3: the agent triages the whole thread right away and prints the result.
+ * Then you can type a follow-up message as the customer (for example a prompt injection)
+ * and the agent triages the thread again.
  *
  * Usage: npm run chat
  */
 
-interface Session {
-  sample: Ticket;
-  /** How many sample messages are revealed so far. */
-  revealed: number;
-  /** Messages you typed yourself, added after the revealed sample messages. */
-  extra: TicketMessage[];
-  lastResult?: TriageResult;
-}
+const WIDTH = Math.min(output.columns || 100, 100);
 
-const HELP = `Commands:
-  Enter       reveal the next sample message and triage the thread so far
-  /all        reveal all remaining sample messages and triage once (fewest API calls)
-  (any text)  add your own message as the customer and triage
-  /thread     show the messages so far
-  /json       show the full JSON of the last result
-  /new        pick another sample ticket
-  /quit       exit`;
+const HELP = "Type a follow-up message as the customer, or: /json  /new  /quit";
 
+const DECISION_LABEL: Record<Decision, string> = {
+  auto_respond: "Auto-respond",
+  route_to_specialist: "Route to specialist",
+  escalate_to_human: "Escalate to human",
+};
+
+const URGENCY_COLOR: Record<Urgency, Parameters<typeof styleText>[0]> = {
+  critical: ["red", "bold"],
+  high: "red",
+  medium: "yellow",
+  low: "green",
+};
+
+const KB_TITLES = new Map(articles.map((a) => [a.id, a.title]));
+
+// ---------- Formatting helpers ----------
+
+const heading = (text: string) => console.log(`\n${styleText(["bold", "cyan"], text)}`);
 const dim = (text: string) => styleText("dim", text);
-const bold = (text: string) => styleText("bold", text);
 
-function currentTicket(session: Session): Ticket {
-  return { ...session.sample, messages: [...session.sample.messages.slice(0, session.revealed), ...session.extra] };
+/** Word-wraps text to the terminal width, keeping the original line breaks. */
+function wrap(text: string, indent = "  "): string {
+  const max = WIDTH - indent.length;
+  return text
+    .split("\n")
+    .map((paragraph) => {
+      const lines: string[] = [];
+      let line = "";
+      for (const word of paragraph.split(" ")) {
+        if (line && line.length + word.length + 1 > max) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = line ? `${line} ${word}` : word;
+        }
+      }
+      lines.push(line);
+      return lines.map((l) => indent + l).join("\n");
+    })
+    .join("\n");
 }
 
-function printStartMenu(samples: Ticket[]): void {
-  console.log(`\n${bold("Pick a sample ticket")}`);
-  for (const t of samples) console.log(`  ${t.id}  ${t.customer.info} (${t.messages.length} messages)`);
+/** A "label   value" row; extra lines of the value are aligned under the first. */
+function row(label: string, value: string): void {
+  const pad = "  " + " ".repeat(13);
+  console.log(`  ${label.padEnd(13)}${value.split("\n").join(`\n${pad}`)}`);
 }
 
-function startSession(choice: string, samples: Ticket[]): Session | undefined {
-  const sample = samples.find((t) => t.id === choice.toUpperCase());
-  if (!sample) {
-    console.log(`Please type one of: ${samples.map((t) => t.id).join(", ")}`);
-    return undefined;
+/** Shows tool arguments as key=value instead of raw JSON. */
+function formatArgs(json: string): string {
+  try {
+    return Object.entries(JSON.parse(json) as Record<string, unknown>)
+      .map(([key, value]) => `${key}=${typeof value === "string" ? `"${value}"` : String(value)}`)
+      .join("  ");
+  } catch {
+    return json;
   }
-  console.log(dim(`${sample.id} loaded. Press Enter for the first message, or type /all.`));
-  return { sample, revealed: 0, extra: [] };
+}
+
+// ---------- Screens ----------
+
+function printTicket(ticket: Ticket): void {
+  console.log(`\n${"=".repeat(WIDTH)}`);
+  console.log(styleText("bold", ` ${ticket.id}  `) + ticket.customer.info);
+  console.log("=".repeat(WIDTH));
+
+  heading("CUSTOMER MESSAGES");
+  ticket.messages.forEach((m, i) => {
+    if (i > 0) console.log();
+    console.log(dim(`  [${m.sent}]`));
+    console.log(wrap(m.text));
+  });
 }
 
 function printEvent(event: AgentEvent): void {
   if (event.type === "tool_call") {
-    const outcome = event.result.ok ? "ok" : `error: ${event.result.error}`;
-    console.log(dim(`  tool ${event.call.name}(${event.call.arguments}) -> ${outcome}`));
+    const mark = event.result.ok ? styleText("green", "ok ") : styleText("red", "err");
+    console.log(`  ${mark} ${event.call.name.padEnd(26)}${dim(formatArgs(event.call.arguments))}`);
   } else {
-    console.log(styleText("yellow", `  fail-safe: ${event.reason}`));
+    console.log(styleText("yellow", `  Automatic triage failed, escalated to a human: ${event.reason}`));
   }
 }
 
 function printResult(r: TriageResult): void {
-  const urgencyColor = r.urgency === "critical" || r.urgency === "high" ? "red" : "green";
-  console.log();
-  console.log(`  ${bold("urgency")}    ${styleText(urgencyColor, r.urgency)}`);
-  console.log(`  ${bold("decision")}   ${r.decision}${r.route_team ? ` -> ${r.route_team}` : ""}`);
-  console.log(`  ${bold("extracted")}  ${r.extracted.product} | ${r.extracted.issue_type} | ${r.extracted.sentiment} | ${r.extracted.language}`);
-  console.log(`  ${bold("confidence")} ${r.confidence}`);
-  console.log(`  ${bold("KB used")}    ${r.kb_articles_used.join(", ") || "-"}`);
-  for (const entry of r.guardrails_applied) console.log(styleText("yellow", `  guardrail  ${entry}`));
-  console.log(`\n${bold("Reply to customer:")}\n${r.customer_reply_draft}`);
-  console.log(`\n${bold("Internal note:")}\n${dim(r.internal_note)}\n`);
+  heading("RESULT");
+  row("Urgency", styleText(URGENCY_COLOR[r.urgency], r.urgency.toUpperCase()));
+  row("Decision", `${DECISION_LABEL[r.decision]}${r.route_team ? `  ->  ${r.route_team}` : ""}`);
+  row("Product", r.extracted.product);
+  row("Issue type", r.extracted.issue_type);
+  row("Sentiment", r.extracted.sentiment);
+  row("Language", r.extracted.language);
+  row("Confidence", `${Math.round(r.confidence * 100)}%`);
+  row("KB articles", r.kb_articles_used.map((id) => `${id}  ${KB_TITLES.get(id) ?? ""}`).join("\n") || "none");
+  row("Guardrails", r.guardrails_applied.length ? styleText("yellow", r.guardrails_applied.join("\n")) : "none");
+
+  heading("REPLY TO CUSTOMER");
+  console.log(wrap(r.customer_reply_draft));
+
+  heading("INTERNAL NOTE");
+  console.log(dim(wrap(r.internal_note)));
+  console.log(`\n${"-".repeat(WIDTH)}`);
 }
 
-/** Handles one input line while a ticket is open. Returns what the main loop should do next. */
-async function handleLine(line: string, session: Session, llm: LlmClient): Promise<"continue" | "new" | "quit"> {
-  const remaining = session.sample.messages.length - session.revealed;
+// ---------- Session ----------
 
-  switch (line) {
-    case "/quit":
-      return "quit";
-    case "/new":
-      return "new";
-    case "/thread": {
-      const { messages } = currentTicket(session);
-      if (messages.length === 0) console.log(dim("No messages yet. Press Enter to reveal the first one."));
-      for (const m of messages) console.log(`  ${dim(`(${m.sent})`)} ${m.text}`);
-      return "continue";
-    }
-    case "/json":
-      console.log(session.lastResult ? JSON.stringify(session.lastResult, null, 2) : "No result yet.");
-      return "continue";
-    case "":
-      if (remaining === 0) {
-        console.log(dim("No more sample messages. Type your own message, /new or /quit."));
-        return "continue";
-      }
-      session.revealed++;
-      break;
-    case "/all":
-      session.revealed = session.sample.messages.length;
-      break;
-    default:
-      if (line.startsWith("/")) {
-        console.log(HELP);
-        return "continue";
-      }
-      session.extra.push({ sent: "just now", text: line });
-  }
+interface Session {
+  ticket: Ticket;
+  lastResult?: TriageResult;
+}
 
-  const ticket = currentTicket(session);
-  const newest = ticket.messages.at(-1)!;
-  console.log(`\n${styleText("cyan", `customer (${newest.sent}):`)} ${newest.text}`);
-  console.log(dim(`Triaging ${ticket.messages.length} message(s)...`));
-  session.lastResult = await triageTicket(ticket, { llm, onEvent: printEvent });
+async function triage(session: Session, llm: LlmClient, model: string): Promise<void> {
+  printTicket(session.ticket);
+  heading(`AGENT (${model})`);
+  session.lastResult = await triageTicket(session.ticket, { llm, onEvent: printEvent });
   printResult(session.lastResult);
-  return "continue";
+  console.log(dim(HELP));
+}
+
+function printMenu(samples: Ticket[]): void {
+  console.log(`\n${styleText("bold", "Pick a sample ticket")}`);
+  for (const t of samples) console.log(`  ${styleText("bold", t.id)}  ${t.customer.info}`);
 }
 
 async function main(): Promise<void> {
@@ -134,30 +154,43 @@ async function main(): Promise<void> {
   rl.on("close", () => (closed = true));
   rl.on("SIGINT", () => rl.close()); // Ctrl+C exits cleanly
 
-  console.log(bold(`Support triage agent (${config.openai.model})`));
-  console.log(dim("Each triage sends the thread to the API (about 3 to 4 requests)."));
-  console.log(HELP);
+  console.log(styleText("bold", "Support ticket triage agent"));
+  console.log(dim(`Model ${config.openai.model}. Each triage calls the OpenAI API about 3 to 4 times.`));
 
   let session: Session | undefined;
-  printStartMenu(samples);
+  printMenu(samples);
   rl.setPrompt("ticket> ");
   rl.prompt();
 
   // `for await` buffers lines typed while the agent is busy, so nothing is lost.
   for await (const raw of rl) {
     const line = raw.trim();
-    if (!session) {
-      if (line) session = startSession(line, samples);
-    } else {
-      const next = await handleLine(line, session, llm);
-      if (next === "quit") break;
-      if (next === "new") {
-        session = undefined;
-        printStartMenu(samples);
+
+    if (line === "/quit") break;
+    if (line === "/new") {
+      session = undefined;
+      printMenu(samples);
+    } else if (!session) {
+      const sample = samples.find((t) => t.id === line.toUpperCase());
+      if (sample) {
+        session = { ticket: sample };
+        await triage(session, llm, config.openai.model);
+      } else if (line) {
+        console.log(`Please type one of: ${samples.map((t) => t.id).join(", ")}`);
       }
+    } else if (line === "/json") {
+      console.log(JSON.stringify(session.lastResult, null, 2));
+    } else if (line.startsWith("/")) {
+      console.log(HELP);
+    } else if (line) {
+      // A follow-up from the customer: add it to the thread and triage again.
+      const messages = [...session.ticket.messages, { sent: "just now", text: line }];
+      session = { ticket: { ...session.ticket, messages } };
+      await triage(session, llm, config.openai.model);
     }
+
     if (closed) break; // input closed (Ctrl+C) while the agent was working
-    rl.setPrompt(session ? styleText("cyan", "> ") : "ticket> ");
+    rl.setPrompt(session ? styleText("cyan", "customer> ") : "ticket> ");
     rl.prompt();
   }
 
