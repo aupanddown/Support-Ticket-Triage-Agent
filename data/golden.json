@@ -331,5 +331,131 @@
         "KB-203"
       ]
     }
+  },
+  {
+    "ticket_id": "H-7",
+    "set": "held_out",
+    "description": "Double charge, polite, no deadline: a human in Billing at high urgency",
+    "ticket": {
+      "id": "H-7",
+      "customer": {
+        "id": "C-3001",
+        "info": "Pro plan, 5 months customer, active user (daily logins), no previous support tickets"
+      },
+      "messages": [
+        {
+          "sent": "just now",
+          "text": "Hi, I've been double-charged for my Pro plan this month. Could you please fix it?"
+        }
+      ]
+    },
+    "expected": {
+      "urgency": [
+        "high",
+        "critical"
+      ],
+      "decision": "escalate_to_human",
+      "route_team": "Billing",
+      "reply_language": "en",
+      "issue_types_include": [
+        "billing_dispute"
+      ]
+    }
+  },
+  {
+    "ticket_id": "H-8",
+    "set": "held_out",
+    "description": "Enterprise outage for the whole team, without internal details in the reply",
+    "ticket": {
+      "id": "H-8",
+      "customer": {
+        "id": "C-2001",
+        "info": "Enterprise plan, Thailand region, 45 seats, 8 months customer"
+      },
+      "messages": [
+        {
+          "sent": "just now",
+          "text": "We are getting 502 Bad Gateway for everyone on our team since 10 minutes ago. Nobody can work."
+        }
+      ]
+    },
+    "expected": {
+      "urgency": "critical",
+      "decision": "escalate_to_human",
+      "route_team": "Engineering_Incident",
+      "reply_language": "en",
+      "issue_types_include": [
+        "outage"
+      ],
+      "reply_must_not_match": [
+        "\\d+\\s*%",
+        "ap-southeast",
+        "load balancer",
+        "error rate"
+      ]
+    }
+  },
+  {
+    "ticket_id": "H-9",
+    "set": "held_out",
+    "description": "Enterprise how-to while the customer's region is degraded: still a how-to",
+    "ticket": {
+      "id": "H-9",
+      "customer": {
+        "id": "C-2001",
+        "info": "Enterprise plan, Thailand region, 45 seats, 8 months customer"
+      },
+      "messages": [
+        {
+          "sent": "just now",
+          "text": "Quick question: how do I invite a new teammate to one of our projects?"
+        }
+      ]
+    },
+    "expected": {
+      "urgency": [
+        "low",
+        "medium"
+      ],
+      "decision": "auto_respond",
+      "route_team": null,
+      "reply_language": "en",
+      "kb_articles_include": [
+        "KB-402"
+      ],
+      "issue_types_include": [
+        "how_to"
+      ]
+    }
+  },
+  {
+    "ticket_id": "H-10",
+    "set": "held_out",
+    "description": "Thai double charge: Billing, Thai reply",
+    "ticket": {
+      "id": "H-10",
+      "customer": {
+        "id": "C-1001",
+        "info": "Free plan, 4 months on free tier"
+      },
+      "messages": [
+        {
+          "sent": "just now",
+          "text": "โดนตัดเงิน 2 ครั้งครับ แต่แพ็กเกจยังเป็น Free อยู่เลย ช่วยตรวจสอบให้หน่อยครับ"
+        }
+      ]
+    },
+    "expected": {
+      "urgency": [
+        "high",
+        "critical"
+      ],
+      "decision": "escalate_to_human",
+      "route_team": "Billing",
+      "reply_language": "th",
+      "issue_types_include": [
+        "billing_dispute"
+      ]
+    }
   }
 ]
