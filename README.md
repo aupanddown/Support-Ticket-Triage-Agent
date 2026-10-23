@@ -29,7 +29,11 @@ npm install
 cp .env.example .env
 ```
 
-Then open `.env` and set `OPENAI_API_KEY`. `OPENAI_MODEL` is optional; the default is `gpt-5.4-mini` (see `src/config.ts`). Other optional settings (timeout, retries, port, host) are listed in `.env.example`.
+(On Windows: `copy .env.example .env` in cmd, or `Copy-Item .env.example .env` in PowerShell.)
+
+Then open `.env` and set `OPENAI_API_KEY`. `OPENAI_MODEL` is optional; the default is `gpt-5.4-mini` (see `src/config.ts`). Any other model must support function calling together with structured outputs (`json_schema`). Other optional settings (timeout, retries, port, host) are listed in `.env.example`.
+
+If the API key or model does not work, the agent does not crash: each ticket is escalated to a human with the reason, and the CLI prints a warning.
 
 ## Usage
 
@@ -69,7 +73,7 @@ curl -s -X POST http://127.0.0.1:3000/triage \
   -d @examples/ticket.json
 ```
 
-The API is plain JSON, so a web or Flutter client can call it directly. Set `HOST=0.0.0.0` to reach it from a phone or emulator on the local network.
+On Windows PowerShell, use `curl.exe` instead of `curl`. Set `HOST=0.0.0.0` to accept connections from other machines.
 
 ### Tests, type check and evaluation
 
@@ -117,12 +121,14 @@ The model decides first; `src/policy.ts` then applies these rules. They can only
 | Rule | Effect |
 |---|---|
 | verified KB articles | KB IDs the tools never returned are removed |
-| R1 money | Refunds, charges, payments or disputes mentioned: `escalate_to_human`, `Billing`, urgency at least `high` |
+| R1 money | Refunds, disputes, duplicate or failed charges (in the text or in the model's classification): `escalate_to_human`, `Billing`, urgency at least `high`. Plain pricing or invoice questions are not matched |
 | R1 no refund promise | A reply that promises a refund, reversal or credit is replaced with a safe reply |
-| R2 enterprise outage | Enterprise customer with an outage or many affected users: `critical`, `escalate_to_human`, `Engineering_Incident` |
+| R2 enterprise outage | Enterprise customer (plan from customer history) with outage evidence (5xx errors, cannot access, or the model classified an outage): `critical`, `escalate_to_human`, `Engineering_Incident` |
 | R3 low confidence | Confidence below 0.7 is never auto-responded |
 | R4 auto-respond requirements | `auto_respond` only for `low`/`medium` urgency with at least one KB article |
-| R5 reply language | A reply in the wrong language is replaced and the ticket goes to a human |
+| R5 reply language | A reply in a different writing system than the ticket (Thai vs Latin vs other) goes to a human; it is replaced when a safe reply exists in that language (English, Thai) |
+
+Every change is also appended to `internal_note` as a `[Policy]` line, so the note always matches the final routing. `auto_respond` with a `route_team` means the reply is sent automatically and that team gets a follow-up item (for example a bug report for `Product`).
 
 ## How to add a new tool
 
@@ -152,7 +158,7 @@ The JSON Schema for the model is generated from the zod schema, arguments are va
 
 ## Sample output
 
-Real results for the three sample tickets, produced with `gpt-5.4-mini` by `npm run eval` (the same agent and policy as `npm run triage`). Model output varies a little between runs.
+Real results for the three sample tickets from the latest `npm run eval` run with `gpt-5.4-mini` (the same agent and policy as `npm run triage`). Model output varies a little between runs; in this run T3 left `route_team` empty, which the eval reports as its one miss.
 
 ### T1: triple charge, presentation in 2 hours
 
@@ -162,7 +168,7 @@ Real results for the three sample tickets, produced with `gpt-5.4-mini` by `npm 
   "urgency": "critical",
   "extracted": {
     "product": "Billing / Pro upgrade",
-    "issue_type": "duplicate_charge_plan_activation_failed",
+    "issue_type": "duplicate_charge_payment_failed_upgrade",
     "sentiment": "angry",
     "language": "en"
   },
@@ -173,9 +179,9 @@ Real results for the three sample tickets, produced with `gpt-5.4-mini` by `npm 
     "KB-202",
     "KB-203"
   ],
-  "customer_reply_draft": "I’m sorry for the trouble here, especially with your presentation in 2 hours. I can see the upgrade attempt did not complete, and your account is still on Free even though the payment was captured.\n\nThere are 3 captured Pro upgrade charges on the account right now: TX-9001 ($29.99, card ending 4242), TX-9002 ($29.99, card ending 5511), and TX-9003 ($29.99, card ending 5511).\n\nThe right team has this now and will review the charges and the failed activation. They’ll also check why Pro was not enabled after payment.\n\nPlease don’t open a bank dispute yet, because that can make the investigation harder. The Billing team will review this as soon as possible.",
-  "internal_note": "Customer on Free plan attempted Pro upgrade 3 times today. Billing data shows pending_upgrade target Pro with status activation_failed, payment captured but plan activation did not complete. Transactions captured: TX-9001 29.99 USD card 4242, TX-9002 29.99 USD card 5511, TX-9003 29.99 USD card 5511. Customer is angry, says they need Pro export features for a presentation in 2 hours and threatened to dispute all charges by end of day if not reversed. This involves multiple captured charges and account activation failure, so Billing should review urgently. Also relevant KB says pending authorizations can drop off in 3-5 business days, but these are captured charges, not just pending auths.",
-  "confidence": 0.97,
+  "customer_reply_draft": "Hi Jordan, I’m sorry for the trouble here. I can see the Pro upgrade was attempted 3 times today, your account is still on Free, and there are 3 captured charges for $29.99 each on different cards, while the plan activation failed.\n\nThe Billing team needs to review these charges and the failed activation. The Pro export features will become available once the plan is active, and I’ve marked this as urgent since you have a presentation in 2 hours.\n\nPlease do not open a bank dispute yet, since that can lock the account while the charges are being investigated. A specialist will review this as soon as possible.",
+  "internal_note": "Customer is on Free plan, attempted Pro upgrade 3 times today, and now has three captured charges: TX-9001 ($29.99, card 4242), TX-9002 ($29.99, card 5511), TX-9003 ($29.99, card 5511). Pending upgrade status: activation_failed, payment captured but plan activation did not complete. Customer says they need Pro export features for a presentation in 2 hours and threatened to dispute all charges by end of day if not reversed. This is a money issue plus urgent deadline, so escalate to Billing. Also note the customer retried with different cards after a failed payment, which matches KB guidance about duplicate charges/pending authorizations.",
+  "confidence": 0.98,
   "guardrails_applied": []
 }
 ```
@@ -187,7 +193,7 @@ Real results for the three sample tickets, produced with `gpt-5.4-mini` by `npm 
   "ticket_id": "T2",
   "urgency": "critical",
   "extracted": {
-    "product": "Web App / Login",
+    "product": "Web App",
     "issue_type": "outage",
     "sentiment": "angry",
     "language": "th"
@@ -195,12 +201,10 @@ Real results for the three sample tickets, produced with `gpt-5.4-mini` by `npm 
   "decision": "escalate_to_human",
   "route_team": "Engineering_Incident",
   "kb_articles_used": [
-    "KB-301",
-    "KB-302",
-    "KB-401"
+    "KB-301"
   ],
-  "customer_reply_draft": "ขอบคุณที่แจ้งครับ ตอนนี้ผมตรวจพบว่าฝั่ง region Asia มีปัญหาจริง แม้ status.company.com จะยังแสดงว่า all systems operational อยู่ก็ตาม\n\nจากการตรวจสอบภายใน พบว่า Web App และ API ใน Asia อยู่ในสถานะ degraded และมี HTTP 500 error rate สูงตั้งแต่ประมาณ 2 ชั่วโมงที่แล้ว ซึ่งสอดคล้องกับอาการที่คุณเจอ, รวมถึงคนในทีมของคุณที่เข้าไม่ได้จากหลายเบราว์เซอร์และหลายเครื่อง\n\nเคสนี้ถูกส่งต่อให้ทีมที่เกี่ยวข้องแล้ว และกำลังตรวจสอบอยู่ เนื่องจากเป็น Enterprise account และกระทบผู้ใช้งานหลายคนกับเดโมบ่ายนี้ ทีมจะให้ความสำคัญสูงสุดครับ\n\nขออภัยในความไม่สะดวกอย่างมาก หากมีข้อมูลเพิ่ม เช่น เวลาที่เริ่มเกิดปัญหา หรือหน้าที่ขึ้น error 500 เป็นหน้าหลัก/บางฟีเจอร์เท่านั้น ส่งมาได้เลยครับ เราจะใช้ประกอบการตรวจสอบต่อ",
-  "internal_note": "Enterprise customer in Thailand/Asia, 45 seats, first critical issue. Thread shows multi-user access failure with HTTP 500 for 2 hours, multiple browsers/devices affected, and a hard business deadline: customer has a demo this afternoon and says the deal may be lost. Public status page still says all systems operational, but internal monitoring shows Asia Web App and API degraded since about 2 hours ago, HTTP 500 error rate 42% from ap-southeast load balancer. Route to Engineering_Incident. KB articles used support that this is likely a service issue and that public status may lag internal incidents. No billing aspect.",
+  "customer_reply_draft": "ขอบคุณที่แจ้งเข้ามาครับ ตอนนี้เราดูแล้วพบว่า region Asia มีปัญหาจริง แม้ status page จะยังขึ้นว่า all systems operational อยู่ก็ตาม\n\nจากที่คุณแจ้งมา, error 500 เกิดกับหลายเบราว์เซอร์และหลายเครื่อง และมีเพื่อนร่วมงานเข้าไม่ได้ด้วย ซึ่งสอดคล้องกับปัญหาฝั่งระบบมากกว่าฝั่งเครื่องผู้ใช้\n\nทีมที่เกี่ยวข้องได้รับเคสนี้แล้วและกำลังตรวจสอบอยู่ครับ คุณมี demo กับลูกค้ารายใหญ่ในบ่ายนี้ เราเข้าใจว่ากระทบงานมากและจะเร่งดูให้ที่สุด\n\nถ้ามีอัปเดตเพิ่มเติมระหว่างนี้ เราจะแจ้งกลับทันทีครับ",
+  "internal_note": "Enterprise customer in Thailand/Asia, 45 seats, daily active, first critical issue. Reports HTTP 500 login/access failure for 2 hours, reproducible across multiple browsers and devices, affecting coworkers too. Customer says they have a large customer demo this afternoon and could lose the deal if service is not restored. Public status page still says all systems operational, but internal monitoring shows Asia Web App degraded: HTTP 500 error rate 42% from ap-southeast load balancer since about 2 hours ago, API also degraded. KB-301 supports likely service issue. Route to Engineering_Incident, critical urgency due to outage and imminent business deadline.",
   "confidence": 0.98,
   "guardrails_applied": []
 }
@@ -219,14 +223,14 @@ Real results for the three sample tickets, produced with `gpt-5.4-mini` by `npm 
     "language": "en"
   },
   "decision": "auto_respond",
-  "route_team": "Product",
+  "route_team": null,
   "kb_articles_used": [
     "KB-101",
     "KB-102"
   ],
-  "customer_reply_draft": "Hi Taylor, thanks for checking and for the extra details.\n\nYes, on Pro you should see Light and System Default only, there is no separate Dark toggle yet. System Default follows your operating system theme, so if your Mac is set to dark mode the app should switch too.\n\nIf it is still showing light after you choose System Default, please try:\n1. Fully quit and reopen the app after changing your Mac theme\n2. Make sure you are on the latest app version\n3. If you are using the browser version, check whether any extension is forcing a light theme\n\nFor scheduling dark mode, we do not have an in-app schedule yet. The current workaround on macOS is to set Appearance to System Default and use macOS automatic switching: System Settings > Appearance > Auto.\n\nHelp article: https://help.company.com/articles/appearance-settings\nScheduling info: https://help.company.com/articles/schedule-theme\n\nIf you want, we can also pass the scheduling idea along as product feedback.",
-  "internal_note": "Customer on Pro plan, macOS desktop app, daily user, no prior tickets. Issue is twofold: how System Default works and a feature request for scheduled dark mode. KB says there is no separate Dark toggle, System Default should follow OS theme, and macOS Auto can schedule it. If System Default still stays light after quitting/reopening and updating, this could be a bug, but thread does not show they tried the troubleshooting yet. Route Product for feature request feedback if needed; no urgency, no money involved.",
-  "confidence": 0.95,
+  "customer_reply_draft": "Yes, we support dark mode through Settings > Appearance.\n\nOn Pro, the available options are Light and System Default. There isn’t a separate Dark toggle yet. System Default should follow your Mac’s appearance, so if your Mac is set to dark mode, the app should switch too.\n\nIf it stays light after you choose System Default, please try:\n1. Fully quit and reopen the app after changing your Mac’s theme.\n2. Make sure you’re on the latest app version.\n3. If you’re using the browser, check whether an extension is forcing a light theme.\n\nFor scheduling, the app doesn’t have its own dark mode schedule yet. The workaround on macOS is to set your Mac to switch automatically: System Settings > Appearance > Auto. That will change between light and dark based on time of day.\n\nHelp article: https://help.company.com/articles/appearance-settings\nScheduling article: https://help.company.com/articles/schedule-theme\n\nIf you’d like, you can also share the scheduling idea with support as a feature request.",
+  "internal_note": "Customer on Pro plan, macOS desktop app, 5 months active, no prior tickets. Asked about dark mode, then reported System Default stays light even when macOS is set to dark. KB says System Default should follow OS theme, so this may be a bug if they already tried switching the OS theme and the app still remains light. Also asked for scheduled dark mode, which is not currently available. Since KB fully answers the how-to and feature request, auto-responding. If the theme still does not change after restart/latest version, Product could investigate the possible bug.",
+  "confidence": 0.82,
   "guardrails_applied": []
 }
 ```
@@ -236,8 +240,9 @@ Real results for the three sample tickets, produced with `gpt-5.4-mini` by `npm 
 - **Mock data instead of real systems.** Customers, billing, service status and the knowledge base are JSON files in `data/`, consistent with the sample tickets. The tools have the same shape a real integration would have.
 - **Teams:** `Billing`, `Engineering_Incident`, `Product`, `Support`.
 - **All tools are read-only.** No tool can issue refunds, change plans or send messages. Anything involving money is decided by a human.
-- **The customer's plan comes from the ticket's customer info** for the policy (R2), and from `get_customer_history` for the model.
-- **Language detection supports English and Thai**, the two languages in the samples. Adding a language means adding a code in `src/language.ts` and its safe replies in `src/policy.ts`.
+- **The customer's plan** comes from `get_customer_history`; the policy falls back to the ticket's customer info if the tool was not called.
+- **Language checks work on writing systems** (Thai, Latin, other), which catches a reply in the wrong script without guessing. Safe fallback replies exist in English and Thai; adding a language means adding its replies in `src/policy.ts`.
+- **The golden set has two parts:** `dev` (the three sample tickets and a prompt injection case, used while writing the prompt) and `held_out` (six cases never used for tuning, including tickets that must not be escalated, a Spanish and a Thai ticket). `npm run eval` reports both.
 - **Relative message times** ("3 hours ago") are kept as in the samples; a real system would use timestamps.
 
 ## Future improvements

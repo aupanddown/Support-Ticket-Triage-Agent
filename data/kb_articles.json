@@ -4,7 +4,15 @@
     "title": "Appearance settings: Light and System Default themes",
     "url": "https://help.company.com/articles/appearance-settings",
     "product": "appearance",
-    "tags": ["dark mode", "theme", "appearance", "system default", "light", "settings", "macos"],
+    "tags": [
+      "dark mode",
+      "theme",
+      "appearance",
+      "system default",
+      "light",
+      "settings",
+      "macos"
+    ],
     "body": "Go to Settings > Appearance to choose a theme. Two options are available on all plans: Light, and System Default. System Default follows your operating system theme, so if your Mac or PC is set to dark mode the app shows a dark theme. A separate Dark toggle is not available yet. If System Default does not switch to dark: 1) fully quit and reopen the app after changing the OS theme, 2) make sure you are on the latest app version, 3) in a browser, check that no extension forces a light theme. If it still does not follow your OS, contact support so we can investigate."
   },
   {
@@ -12,7 +20,14 @@
     "title": "Can I schedule dark mode or switch themes automatically?",
     "url": "https://help.company.com/articles/schedule-theme",
     "product": "appearance",
-    "tags": ["dark mode", "schedule", "automatic", "auto-switch", "theme", "time"],
+    "tags": [
+      "dark mode",
+      "schedule",
+      "automatic",
+      "auto-switch",
+      "theme",
+      "time"
+    ],
     "body": "The app does not have its own theme schedule yet. Workaround: set the app to System Default, then let your operating system switch automatically. On macOS choose System Settings > Appearance > Auto, which switches between light and dark based on time of day. On Windows you can use Night light schedules or a third party scheduler. Feature requests can be shared with our Product team through support."
   },
   {
@@ -20,7 +35,14 @@
     "title": "Payment failed when upgrading your plan",
     "url": "https://help.company.com/articles/payment-failed-upgrade",
     "product": "billing",
-    "tags": ["payment", "failed", "upgrade", "pro", "card", "declined"],
+    "tags": [
+      "payment",
+      "failed",
+      "upgrade",
+      "pro",
+      "card",
+      "declined"
+    ],
     "body": "If your payment fails while upgrading, do not retry many times with different cards, as each attempt can create a pending authorization. Our Billing team can confirm the status of each charge and activate your plan manually. Only the Billing team can review charges, refunds, or plan changes."
   },
   {
@@ -28,7 +50,16 @@
     "title": "Duplicate or pending charges on your statement",
     "url": "https://help.company.com/articles/duplicate-charges",
     "product": "billing",
-    "tags": ["duplicate", "charge", "charges", "pending", "refund", "bank", "dispute", "billing"],
+    "tags": [
+      "duplicate",
+      "charge",
+      "charges",
+      "pending",
+      "refund",
+      "bank",
+      "dispute",
+      "billing"
+    ],
     "body": "Pending authorizations from failed payments usually drop off within 3 to 5 business days, depending on your bank. If you see more than one captured charge for the same plan, contact support and our Billing team will review every transaction on your account. Please reach out to us before opening a dispute with your bank, as disputes can lock the account while they are investigated."
   },
   {
@@ -36,15 +67,46 @@
     "title": "What is included in the Pro plan",
     "url": "https://help.company.com/articles/pro-plan-features",
     "product": "billing",
-    "tags": ["pro", "plan", "features", "export", "upgrade", "pricing"],
+    "tags": [
+      "pro",
+      "plan",
+      "features",
+      "export",
+      "upgrade",
+      "pricing"
+    ],
     "body": "The Pro plan costs $29.99 per month and includes advanced export (PDF, PPTX, high resolution images), unlimited projects, and priority email support. Pro features become available as soon as the plan is active on your account."
+  },
+  {
+    "id": "KB-204",
+    "title": "Download invoices and receipts",
+    "url": "https://help.company.com/articles/invoices",
+    "product": "billing",
+    "tags": [
+      "invoice",
+      "invoices",
+      "receipt",
+      "download",
+      "billing history",
+      "accountant",
+      "tax"
+    ],
+    "body": "Go to Settings > Billing > Billing history to download an invoice or receipt as a PDF for every payment. Invoices are created on each payment date and include your company details if you add them in Settings > Billing > Billing information. Enterprise invoices are also emailed to the billing contact."
   },
   {
     "id": "KB-301",
     "title": "Troubleshooting HTTP 500 errors and login problems",
     "url": "https://help.company.com/articles/http-500-errors",
     "product": "platform",
-    "tags": ["error", "500", "outage", "cannot access", "login", "down", "browser"],
+    "tags": [
+      "error",
+      "500",
+      "outage",
+      "cannot access",
+      "login",
+      "down",
+      "browser"
+    ],
     "body": "An HTTP 500 error means something went wrong on our side. If the error appears on several browsers and devices, or for several people in your team, it is likely a service issue rather than a problem with your setup. Please tell support which region you are in and when the errors started so the incident team can investigate."
   },
   {
@@ -52,7 +114,15 @@
     "title": "About the status page and regional incidents",
     "url": "https://help.company.com/articles/status-page",
     "product": "platform",
-    "tags": ["status", "status page", "incident", "region", "asia", "outage", "operational"],
+    "tags": [
+      "status",
+      "status page",
+      "incident",
+      "region",
+      "asia",
+      "outage",
+      "operational"
+    ],
     "body": "status.company.com shows confirmed incidents. A regional issue can take some time to be confirmed and posted, so the status page may show All systems operational while a problem is still being investigated. If you are affected, contact support with your region and we will check internal monitoring."
   },
   {
@@ -60,7 +130,32 @@
     "title": "Enterprise support and response times",
     "url": "https://help.company.com/articles/enterprise-support",
     "product": "platform",
-    "tags": ["enterprise", "sla", "priority", "critical", "support", "response time"],
+    "tags": [
+      "enterprise",
+      "sla",
+      "priority",
+      "critical",
+      "support",
+      "response time"
+    ],
     "body": "Enterprise customers have a 1 hour response target for critical issues, such as an outage affecting many users. Critical issues are handled by the incident team, and your account team is kept informed."
+  },
+  {
+    "id": "KB-402",
+    "title": "Invite teammates and share projects",
+    "url": "https://help.company.com/articles/share-projects",
+    "product": "platform",
+    "tags": [
+      "share",
+      "sharing",
+      "invite",
+      "teammates",
+      "coworkers",
+      "collaborate",
+      "edit",
+      "permissions",
+      "seats"
+    ],
+    "body": "Open the project, click Share, and enter your teammates' email addresses. Choose Viewer or Editor access for each person. People outside your workspace need a seat; Admins can manage seats in Settings > Members."
   }
 ]

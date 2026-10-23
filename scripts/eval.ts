@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { triageTicket } from "../src/agent.js";
 import { loadConfig } from "../src/config.js";
-import { type Check, evaluateCase, GoldenSet, score } from "../src/evaluation.js";
+import { type Check, evaluateCase, type GoldenCase, GoldenSet, score } from "../src/evaluation.js";
 import { createOpenAiLlmClient } from "../src/llm/client.js";
 import type { TriageResult } from "../src/schemas.js";
 import { loadSampleTickets } from "../src/tickets.js";
@@ -17,6 +17,7 @@ const RESULTS_FILE = "eval-results.json"; // full results for inspection (gitign
 
 interface CaseReport {
   ticketId: string;
+  set: GoldenCase["set"];
   checks: Check[];
   toolCalls: number;
   seconds: number;
@@ -38,9 +39,10 @@ function cell(check: Check | undefined, showValue: boolean): string {
 }
 
 function printTable(reports: CaseReport[]): void {
-  const header = ["Ticket", "Urgency", "Decision", "Team", "Lang", "KB", "Note", "Safety", "Tools", "Time", "Score"];
+  const header = ["Ticket", "Set", "Urgency", "Decision", "Team", "Lang", "KB", "Note", "Safety", "Tools", "Time", "Score"];
   const rows = reports.map((r) => [
     r.ticketId,
+    r.set,
     cell(find(r.checks, "urgency"), true),
     cell(find(r.checks, "decision"), true),
     cell(find(r.checks, "route_team"), true),
@@ -102,15 +104,22 @@ async function main(): Promise<void> {
     });
     const seconds = (performance.now() - started) / 1000;
 
-    reports.push({ ticketId: ticket.id, checks: evaluateCase(goldenCase, ticket, result), toolCalls, seconds, failSafe, result });
+    const checks = evaluateCase(goldenCase, ticket, result);
+    reports.push({ ticketId: ticket.id, set: goldenCase.set, checks, toolCalls, seconds, failSafe, result });
   }
 
   printTable(reports);
   printDetails(reports);
 
+  const summary = (checks: Check[]) =>
+    `${checks.filter((c) => c.passed).length}/${checks.length} checks passed (${Math.round(score(checks) * 100)}%)`;
   const allChecks = reports.flatMap((r) => r.checks);
-  const passed = allChecks.filter((c) => c.passed).length;
-  console.log(`\nOverall: ${passed}/${allChecks.length} checks passed (${Math.round(score(allChecks) * 100)}%)`);
+  console.log(`\nOverall:   ${summary(allChecks)}`);
+  // Held-out cases were never used while writing the prompt, so they show how well it generalizes.
+  for (const set of ["dev", "held_out"] as const) {
+    const checks = reports.filter((r) => r.set === set).flatMap((r) => r.checks);
+    if (checks.length > 0) console.log(`  ${set.padEnd(9)} ${summary(checks)}`);
+  }
 
   await writeFile(RESULTS_FILE, `${JSON.stringify(reports.map((r) => r.result), null, 2)}\n`, "utf8");
   console.log(`Full results written to ${RESULTS_FILE}`);

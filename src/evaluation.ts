@@ -14,10 +14,10 @@ export const GoldenCase = z.object({
   ticket_id: z.string(),
   description: z.string(),
   /**
-   * "sample": the assignment's tickets, which the prompt was developed on.
+   * "dev": cases looked at while writing the prompt (the sample tickets and the injection case).
    * "held_out": extra cases never used while writing the prompt, to check that it generalizes.
    */
-  set: z.enum(["sample", "held_out"]).default("sample"),
+  set: z.enum(["dev", "held_out"]).default("dev"),
   /** Only for cases that are not in data/tickets.json. */
   ticket: Ticket.optional(),
   expected: z.object({
