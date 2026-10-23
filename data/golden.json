@@ -477,7 +477,7 @@
   {
     "ticket_id": "HO-1",
     "set": "held_out",
-    "description": "Enterprise how-to worded like an outage ('No one can...'): stays a how-to",
+    "description": "Enterprise how-to worded like an outage ('No one can...'): not an incident; no KB article says where export is, so a person answers",
     "ticket": {
       "id": "HO-1",
       "customer": {
@@ -496,12 +496,15 @@
         "low",
         "medium"
       ],
-      "decision": "auto_respond",
-      "route_team": null,
-      "reply_language": "en",
-      "kb_articles_include": [
-        "KB-203"
+      "decision": [
+        "route_to_specialist",
+        "auto_respond"
       ],
+      "route_team": [
+        "Support",
+        null
+      ],
+      "reply_language": "en",
       "issue_types_include": [
         "how_to"
       ]
